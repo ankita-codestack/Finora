@@ -160,7 +160,7 @@ router.post("/:id/share", protect, async (req, res) => {
     }
 
     const frontendURL = (
-      process.env.FRONTEND_URL || "http://localhost:5173"
+      process.env.FRONTEND_URL || "http://localhost:5174"
     ).replace(/\/+$/, "");
 
     const shareUrl = `${frontendURL}/public/invoice/${invoice.publicToken}`;
