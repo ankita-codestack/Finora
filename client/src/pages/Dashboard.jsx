@@ -1,6 +1,6 @@
 
 import { useEffect, useMemo, useState } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { Link, NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   FileText,
@@ -9,14 +9,11 @@ import {
   Sparkles,
   ChartNoAxesCombined,
   Settings,
-  Bell,
-  Search,
   Plus,
   ArrowUpRight,
   Wallet,
   Clock3,
   CircleCheck,
-  MoreHorizontal,
   ChevronDown,
 } from "lucide-react";
 
@@ -57,10 +54,41 @@ const getInvoiceStatus = (invoice) => {
 };
 
 export default function Dashboard() {
+  const navigate = useNavigate();
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+
+  // Logged-in user details
+  const [user] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("finoraUser") || "{}");
+    } catch {
+      return {};
+    }
+  });
+
+  const displayName =
+    user.name || user.fullName || user.username || "Finora User";
+
+  const firstName = displayName.trim().split(/\s+/)[0];
+
+  const initials = displayName
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0].toUpperCase())
+    .join("");
+
   const [invoices, setInvoices] = useState([]);
   const [currency, setCurrency] = useState("USD");
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+
+  const handleLogout = () => {
+    localStorage.removeItem("finoraToken");
+    sessionStorage.removeItem("finoraToken");
+    localStorage.removeItem("finoraUser");
+    navigate("/login");
+  };
 
   useEffect(() => {
     const fetchInvoices = async () => {
@@ -307,7 +335,11 @@ export default function Dashboard() {
             </Link>
           </div>
 
-          <button className="flex items-center gap-3 w-full p-3 rounded-lg hover:bg-slate-50">
+          <button
+            type="button"
+            onClick={() => navigate("/settings")}
+            className="flex items-center gap-3 w-full p-3 rounded-lg hover:bg-slate-50"
+          >
             <Settings size={19} className="text-slate-500" />
             <span className="text-sm text-slate-600 font-medium">
               Settings
@@ -316,13 +348,12 @@ export default function Dashboard() {
 
           <div className="border-t border-slate-100 pt-4 mt-2 flex items-center gap-3">
             <div className="w-9 h-9 rounded-full bg-[#DFE6F3] text-[#24407A] flex items-center justify-center font-semibold text-sm">
-              AS
+              {initials}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold truncate">Ankita Sharma</p>
+              <p className="text-sm font-semibold truncate">{displayName}</p>
               <p className="text-xs text-slate-400">Free Workspace</p>
             </div>
-            <MoreHorizontal size={19} className="text-slate-400" />
           </div>
         </div>
       </aside>
@@ -330,7 +361,7 @@ export default function Dashboard() {
       {/* Main Content */}
       <main className="flex-1 lg:ml-[250px] min-w-0">
         {/* Topbar */}
-        <header className="h-[76px] bg-white border-b border-slate-200 px-5 md:px-8 flex items-center justify-between sticky top-0 z-10">
+        <header className="h-[76px] bg-white border-b border-slate-200 px-5 md:px-8 flex items-center justify-between sticky top-0 z-30">
           <div>
             <p className="text-sm text-slate-400 hidden sm:block">
               Workspace / Overview
@@ -338,25 +369,31 @@ export default function Dashboard() {
             <h1 className="text-lg font-semibold">Dashboard</h1>
           </div>
 
-          <div className="flex items-center gap-3">
-            <button className="hidden sm:flex items-center gap-2 bg-[#F3F5F8] rounded-lg px-3 py-2 text-sm text-slate-400">
-              <Search size={16} />
-              Search
-              <span className="text-xs border border-slate-200 rounded px-1.5 py-0.5">
-                /
-              </span>
-            </button>
-
-            <button className="w-9 h-9 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-50">
-              <Bell size={18} />
-            </button>
-
-            <button className="flex items-center gap-2 text-sm font-medium">
+          <div className="relative">
+            <button
+              type="button"
+              aria-label="Open profile menu"
+              aria-expanded={isProfileMenuOpen}
+              onClick={() => setIsProfileMenuOpen((prev) => !prev)}
+              className="flex items-center gap-2 text-sm font-medium"
+            >
               <div className="w-8 h-8 rounded-full bg-[#DFE6F3] text-[#24407A] flex items-center justify-center">
-                AS
+                {initials}
               </div>
               <ChevronDown size={15} className="text-slate-400" />
             </button>
+
+            {isProfileMenuOpen && (
+              <div className="absolute right-0 top-12 w-40 bg-white border border-slate-200 rounded-lg shadow-lg py-1 z-50">
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  Log out
+                </button>
+              </div>
+            )}
           </div>
         </header>
 
@@ -365,7 +402,7 @@ export default function Dashboard() {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
             <div>
               <h2 className="text-2xl font-semibold tracking-tight">
-                Welcome back, Ankita
+                Welcome back, {firstName}
               </h2>
               <p className="text-sm text-slate-500 mt-1">
                 Here's what's happening with your business today.

@@ -1,3 +1,4 @@
+
 import { Routes, Route } from "react-router-dom";
 import Landing from "./pages/Landing";
 import Login from "./pages/Login";
@@ -9,6 +10,7 @@ import Payments from "./pages/Payments";
 import Clients from "./pages/Clients";
 import Assistant from "./pages/Assistant";
 import Insights from "./pages/Insights";
+import Settings from "./pages/Settings";
 
 function App() {
   return (
@@ -23,6 +25,7 @@ function App() {
       <Route path="/clients" element={<Clients />} />
       <Route path="/assistant" element={<Assistant />} />
       <Route path="/insights" element={<Insights />} />
+      <Route path="/settings" element={<Settings />} />
     </Routes>
   );
 }

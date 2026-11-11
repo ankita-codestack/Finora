@@ -20,83 +20,11 @@ import {
   UserRound,
 } from "lucide-react";
 
-import {
-  getStoredClients,
-} from "../lib/clientStorage";
-
+import { getStoredClients } from "../lib/clientStorage";
 import { getStoredInvoices } from "../lib/invoiceStorage";
 import { apiRequest } from "../lib/api";
 
 const MIGRATION_KEY = "finora.clients.migrated.v1";
-
-const demoClients = [
-  {
-    id: "demo-1",
-    name: "Olivia Rhye",
-    email: "olivia@example.com",
-    company: "Olivia Studio",
-    status: "Active",
-    invoiceCount: 12,
-    spent: 845000,
-    due: 120000,
-    isDemo: true,
-  },
-  {
-    id: "demo-2",
-    name: "Phoenix Baker",
-    email: "phoenix@example.com",
-    company: "Baker & Co.",
-    status: "Active",
-    invoiceCount: 8,
-    spent: 520000,
-    due: 0,
-    isDemo: true,
-  },
-  {
-    id: "demo-3",
-    name: "Lana Steiner",
-    email: "lana@example.com",
-    company: "Steiner Design",
-    status: "Active",
-    invoiceCount: 15,
-    spent: 1280000,
-    due: 250000,
-    isDemo: true,
-  },
-  {
-    id: "demo-4",
-    name: "Demi Wilkinson",
-    email: "demi@example.com",
-    company: "Demi Creative",
-    status: "Active",
-    invoiceCount: 4,
-    spent: 210000,
-    due: 95000,
-    isDemo: true,
-  },
-  {
-    id: "demo-5",
-    name: "Candice Wu",
-    email: "candice@example.com",
-    company: "Wu Digital",
-    status: "Active",
-    invoiceCount: 10,
-    spent: 760000,
-    due: 0,
-    isDemo: true,
-  },
-  {
-    id: "demo-6",
-    name: "Natali Craig",
-    email: "natali@example.com",
-    company: "Craig Media",
-    status: "Inactive",
-    invoiceCount: 6,
-    spent: 340000,
-    due: 60000,
-    isDemo: true,
-  },
-];
 
 const navigation = [
   { name: "Overview", path: "/dashboard", icon: LayoutDashboard },
@@ -132,7 +60,6 @@ function mapApiClient(client) {
     address: client.address || "",
     notes: client.notes || "",
     status: client.status || "Active",
-    isDemo: false,
   };
 }
 
@@ -149,14 +76,6 @@ function saveMigrationMap(map) {
 }
 
 function getClientInvoiceStats(client, invoices) {
-  if (client.isDemo) {
-    return {
-      invoiceCount: client.invoiceCount,
-      spent: client.spent,
-      due: client.due,
-    };
-  }
-
   const clientInvoices = invoices.filter(
     (invoice) =>
       invoice.email?.toLowerCase() === client.email.toLowerCase()
@@ -209,7 +128,6 @@ export default function Clients() {
     status: "Active",
   });
 
-  // Fetch MongoDB clients and safely migrate old LocalStorage clients
   useEffect(() => {
     let cancelled = false;
 
@@ -225,7 +143,6 @@ export default function Clients() {
         const migrationMap = getMigrationMap();
 
         for (const legacy of legacyClients) {
-          // Already migrated
           if (
             migrationMap[legacy.id] &&
             remoteClients.some(
@@ -235,7 +152,6 @@ export default function Clients() {
             continue;
           }
 
-          // Reuse an existing MongoDB client with the same email
           const existingClient = remoteClients.find(
             (client) =>
               client.email.toLowerCase() === legacy.email.toLowerCase()
@@ -247,7 +163,6 @@ export default function Clients() {
             continue;
           }
 
-          // Migrate the old browser client to MongoDB
           const createdResult = await apiRequest("/clients", {
             method: "POST",
             body: JSON.stringify({
@@ -290,10 +205,7 @@ export default function Clients() {
     };
   }, []);
 
-  const allClients = useMemo(
-    () => [...demoClients, ...clients],
-    [clients]
-  );
+  const allClients = clients;
 
   const clientRows = useMemo(() => {
     return allClients.map((client) => ({
@@ -424,8 +336,6 @@ export default function Clients() {
   const handleDelete = async (client) => {
     setActiveMenu(null);
 
-    if (client.isDemo) return;
-
     const confirmed = window.confirm(
       `Are you sure you want to delete ${client.name}?`
     );
@@ -450,9 +360,19 @@ export default function Clients() {
     0
   );
 
+  let user = {};
+
+  try {
+    user = JSON.parse(localStorage.getItem("finoraUser") || "{}");
+  } catch {
+    user = {};
+  }
+
+  const accountName =
+    user.name || user.fullName || user.username || "Finora User";
+
   return (
     <div className="min-h-screen bg-[#F3F5F8] text-[#101A2B] flex">
-      {/* Sidebar */}
       <aside className="hidden lg:flex w-[250px] shrink-0 bg-white border-r border-[#E5E9F0] flex-col">
         <div className="px-7 py-7">
           <Link to="/" className="text-[25px] font-bold tracking-tight">
@@ -508,7 +428,6 @@ export default function Clients() {
         </div>
       </aside>
 
-      {/* Main */}
       <main className="flex-1 min-w-0">
         <header className="h-[76px] bg-white border-b border-[#E5E9F0] px-5 md:px-9 flex items-center justify-between">
           <div>
@@ -518,17 +437,16 @@ export default function Clients() {
 
           <div className="flex items-center gap-3">
             <div className="hidden sm:block text-right">
-              <p className="text-sm font-semibold">Ankita Sharma</p>
+              <p className="text-sm font-semibold">{accountName}</p>
               <p className="text-xs text-[#8993A5]">Workspace admin</p>
             </div>
             <div className="w-10 h-10 rounded-full bg-[#DFE6F3] text-[#24407A] flex items-center justify-center font-semibold text-sm">
-              AS
+              {getInitials(accountName)}
             </div>
           </div>
         </header>
 
         <div className="p-5 md:p-9 max-w-[1450px] mx-auto">
-          {/* Heading */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-7">
             <div>
               <h2 className="text-2xl font-semibold tracking-tight">
@@ -555,29 +473,12 @@ export default function Clients() {
             </div>
           )}
 
-          {/* Stats */}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-7">
             {[
-              {
-                label: "Total clients",
-                value: allClients.length,
-                icon: Users,
-              },
-              {
-                label: "Active clients",
-                value: activeCount,
-                icon: UserRound,
-              },
-              {
-                label: "Total outstanding",
-                value: formatMoney(totalDue),
-                icon: CreditCard,
-              },
-              {
-                label: "Saved clients",
-                value: clients.length,
-                icon: Building2,
-              },
+              { label: "Total clients", value: allClients.length, icon: Users },
+              { label: "Active clients", value: activeCount, icon: UserRound },
+              { label: "Total outstanding", value: formatMoney(totalDue), icon: CreditCard },
+              { label: "Saved clients", value: clients.length, icon: Building2 },
             ].map((stat) => {
               const Icon = stat.icon;
 
@@ -587,22 +488,17 @@ export default function Clients() {
                   className="bg-white border border-[#E5E9F0] rounded-2xl p-5"
                 >
                   <div className="flex justify-between items-center">
-                    <p className="text-sm text-[#7C8799]">
-                      {stat.label}
-                    </p>
+                    <p className="text-sm text-[#7C8799]">{stat.label}</p>
                     <div className="w-9 h-9 rounded-xl bg-[#DFE6F3] text-[#24407A] flex items-center justify-center">
                       <Icon size={17} />
                     </div>
                   </div>
-                  <p className="text-2xl font-semibold mt-4">
-                    {stat.value}
-                  </p>
+                  <p className="text-2xl font-semibold mt-4">{stat.value}</p>
                 </div>
               );
             })}
           </div>
 
-          {/* Table */}
           <section className="bg-white border border-[#E5E9F0] rounded-2xl overflow-hidden">
             <div className="p-5 md:p-6 border-b border-[#E5E9F0] flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
@@ -663,9 +559,7 @@ export default function Clients() {
                             {getInitials(client.name)}
                           </div>
                           <div>
-                            <p className="text-sm font-semibold">
-                              {client.name}
-                            </p>
+                            <p className="text-sm font-semibold">{client.name}</p>
                             <p className="text-xs text-[#8993A5] mt-1 flex items-center gap-1">
                               <Mail size={12} />
                               {client.email}
@@ -677,17 +571,9 @@ export default function Clients() {
                         </div>
                       </td>
 
-                      <td className="px-5 py-4 text-sm">
-                        {client.invoiceCount}
-                      </td>
-
-                      <td className="px-5 py-4 text-sm font-medium">
-                        {formatMoney(client.spent)}
-                      </td>
-
-                      <td className="px-5 py-4 text-sm font-medium">
-                        {formatMoney(client.due)}
-                      </td>
+                      <td className="px-5 py-4 text-sm">{client.invoiceCount}</td>
+                      <td className="px-5 py-4 text-sm font-medium">{formatMoney(client.spent)}</td>
+                      <td className="px-5 py-4 text-sm font-medium">{formatMoney(client.due)}</td>
 
                       <td className="px-5 py-4">
                         <span
@@ -705,11 +591,7 @@ export default function Clients() {
                         <div className="relative inline-block">
                           <button
                             onClick={() =>
-                              setActiveMenu(
-                                activeMenu === client.id
-                                  ? null
-                                  : client.id
-                              )
+                              setActiveMenu(activeMenu === client.id ? null : client.id)
                             }
                             className="p-2 rounded-lg hover:bg-[#EEF1F6] text-[#7C8799]"
                             aria-label="Client actions"
@@ -719,31 +601,21 @@ export default function Clients() {
 
                           {activeMenu === client.id && (
                             <div className="absolute right-0 top-10 z-20 w-36 bg-white border border-[#E5E9F0] shadow-lg rounded-xl p-1">
-                              {!client.isDemo && (
-                                <>
-                                  <button
-                                    onClick={() => openEditModal(client)}
-                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[#344054] hover:bg-[#F3F5F8] rounded-lg"
-                                  >
-                                    <Pencil size={14} />
-                                    Edit
-                                  </button>
+                              <button
+                                onClick={() => openEditModal(client)}
+                                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[#344054] hover:bg-[#F3F5F8] rounded-lg"
+                              >
+                                <Pencil size={14} />
+                                Edit
+                              </button>
 
-                                  <button
-                                    onClick={() => handleDelete(client)}
-                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg"
-                                  >
-                                    <Trash2 size={14} />
-                                    Delete
-                                  </button>
-                                </>
-                              )}
-
-                              {client.isDemo && (
-                                <p className="px-3 py-2 text-xs text-[#8993A5]">
-                                  Demo client
-                                </p>
-                              )}
+                              <button
+                                onClick={() => handleDelete(client)}
+                                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg"
+                              >
+                                <Trash2 size={14} />
+                                Delete
+                              </button>
                             </div>
                           )}
                         </div>
@@ -753,10 +625,7 @@ export default function Clients() {
 
                   {!loading && filteredClients.length === 0 && (
                     <tr>
-                      <td
-                        colSpan="6"
-                        className="text-center py-14 text-sm text-[#8993A5]"
-                      >
+                      <td colSpan="6" className="text-center py-14 text-sm text-[#8993A5]">
                         No clients found. Try another search or add a client.
                       </td>
                     </tr>
@@ -764,10 +633,7 @@ export default function Clients() {
 
                   {loading && (
                     <tr>
-                      <td
-                        colSpan="6"
-                        className="text-center py-14 text-sm text-[#8993A5]"
-                      >
+                      <td colSpan="6" className="text-center py-14 text-sm text-[#8993A5]">
                         Loading your clients...
                       </td>
                     </tr>
@@ -777,13 +643,12 @@ export default function Clients() {
             </div>
 
             <div className="px-6 py-4 border-t border-[#E5E9F0] text-xs text-[#8993A5]">
-              Demo clients are sample records. Your saved clients are stored in your Finora account.
+              Your clients are stored in your Finora account.
             </div>
           </section>
         </div>
       </main>
 
-      {/* Add / Edit Modal */}
       {showModal && (
         <div className="fixed inset-0 z-50 bg-[#101A2B]/40 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-[460px] shadow-xl">
@@ -808,14 +673,10 @@ export default function Clients() {
 
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium mb-2">
-                  Client name
-                </label>
+                <label className="block text-sm font-medium mb-2">Client name</label>
                 <input
                   value={form.name}
-                  onChange={(e) =>
-                    setForm({ ...form, name: e.target.value })
-                  }
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
                   maxLength={80}
                   placeholder="e.g. Alex Morgan"
                   className="w-full px-4 py-3 rounded-xl border border-[#E5E9F0] text-sm outline-none focus:border-[#24407A]"
@@ -823,15 +684,11 @@ export default function Clients() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">
-                  Email address
-                </label>
+                <label className="block text-sm font-medium mb-2">Email address</label>
                 <input
                   type="email"
                   value={form.email}
-                  onChange={(e) =>
-                    setForm({ ...form, email: e.target.value })
-                  }
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
                   maxLength={120}
                   placeholder="alex@example.com"
                   className="w-full px-4 py-3 rounded-xl border border-[#E5E9F0] text-sm outline-none focus:border-[#24407A]"
@@ -839,14 +696,10 @@ export default function Clients() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">
-                  Company
-                </label>
+                <label className="block text-sm font-medium mb-2">Company</label>
                 <input
                   value={form.company}
-                  onChange={(e) =>
-                    setForm({ ...form, company: e.target.value })
-                  }
+                  onChange={(e) => setForm({ ...form, company: e.target.value })}
                   maxLength={100}
                   placeholder="Company name"
                   className="w-full px-4 py-3 rounded-xl border border-[#E5E9F0] text-sm outline-none focus:border-[#24407A]"
@@ -854,14 +707,10 @@ export default function Clients() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">
-                  Status
-                </label>
+                <label className="block text-sm font-medium mb-2">Status</label>
                 <select
                   value={form.status}
-                  onChange={(e) =>
-                    setForm({ ...form, status: e.target.value })
-                  }
+                  onChange={(e) => setForm({ ...form, status: e.target.value })}
                   className="w-full px-4 py-3 rounded-xl border border-[#E5E9F0] text-sm outline-none focus:border-[#24407A]"
                 >
                   <option value="Active">Active</option>

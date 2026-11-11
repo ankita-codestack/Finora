@@ -22,75 +22,13 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+
 import {
-  getStoredInvoices,
   formatMoney,
   formatInvoiceDate,
 } from "../lib/invoiceStorage";
-import { apiRequest } from "../lib/api";
 
-const sampleInvoices = [
-  {
-    id: "INV-2026-001",
-    client: "Olivia Rhye",
-    email: "olivia@example.com",
-    issueDate: "2026-10-24",
-    dueDate: "2026-11-07",
-    currency: "USD",
-    totalCents: 240000,
-    status: "Paid",
-  },
-  {
-    id: "INV-2026-002",
-    client: "Phoenix Baker",
-    email: "phoenix@example.com",
-    issueDate: "2026-10-22",
-    dueDate: "2026-11-08",
-    currency: "USD",
-    totalCents: 185000,
-    status: "Pending",
-  },
-  {
-    id: "INV-2026-003",
-    client: "Lana Steiner",
-    email: "lana@example.com",
-    issueDate: "2026-10-19",
-    dueDate: "2026-10-30",
-    currency: "USD",
-    totalCents: 320000,
-    status: "Paid",
-  },
-  {
-    id: "INV-2026-004",
-    client: "Demi Wilkinson",
-    email: "demi@example.com",
-    issueDate: "2026-10-12",
-    dueDate: "2026-10-25",
-    currency: "USD",
-    totalCents: 95000,
-    status: "Overdue",
-  },
-  {
-    id: "INV-2026-005",
-    client: "Candice Wu",
-    email: "candice@example.com",
-    issueDate: "2026-10-10",
-    dueDate: "2026-11-10",
-    currency: "USD",
-    totalCents: 150000,
-    status: "Pending",
-  },
-  {
-    id: "INV-2026-006",
-    client: "Natali Craig",
-    email: "natali@example.com",
-    issueDate: "2026-10-08",
-    dueDate: "2026-10-28",
-    currency: "USD",
-    totalCents: 210000,
-    status: "Paid",
-  },
-];
+import { apiRequest } from "../lib/api";
 
 const navigation = [
   { label: "Overview", path: "/dashboard", icon: LayoutDashboard },
@@ -110,7 +48,7 @@ function getInvoiceStatus(invoice) {
     return "Overdue";
   }
 
-  return invoice.status;
+  return invoice.status || "Draft";
 }
 
 function escapeCSV(value) {
@@ -168,10 +106,20 @@ function mapMongoInvoice(invoice) {
     ...invoice,
     id: invoice.invoiceNumber || invoice._id,
     mongoId: invoice._id,
-    client: invoice.client?.name || "Unknown Client",
-    email: invoice.client?.email || "",
-    issueDate: invoice.issueDate,
-    dueDate: invoice.dueDate,
+    client:
+      typeof invoice.client === "object"
+        ? invoice.client?.name || "Unknown Client"
+        : invoice.client || "Unknown Client",
+    email:
+      typeof invoice.client === "object"
+        ? invoice.client?.email || ""
+        : invoice.clientEmail || "",
+    issueDate: invoice.issueDate
+      ? String(invoice.issueDate).slice(0, 10)
+      : "",
+    dueDate: invoice.dueDate
+      ? String(invoice.dueDate).slice(0, 10)
+      : "",
     currency: invoice.currency || "USD",
     totalCents: Math.round(Number(invoice.total || 0) * 100),
     status: invoice.status || "Draft",
@@ -181,7 +129,7 @@ function mapMongoInvoice(invoice) {
 export default function Invoices() {
   const location = useLocation();
 
-  const [storedInvoices, setStoredInvoices] = useState(() => getStoredInvoices());
+  const [storedInvoices, setStoredInvoices] = useState([]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [loading, setLoading] = useState(true);
@@ -203,11 +151,13 @@ export default function Invoices() {
 
   async function loadInvoices() {
     try {
+      setLoading(true);
+      setLoadError("");
+
       const response = await apiRequest("/invoices");
       const mongoInvoices = (response.invoices || []).map(mapMongoInvoice);
 
       setStoredInvoices(mongoInvoices);
-      setLoadError("");
     } catch (error) {
       setLoadError(error.message || "Unable to load invoices.");
     } finally {
@@ -215,45 +165,15 @@ export default function Invoices() {
     }
   }
 
-
-useEffect(() => {
-  let isMounted = true;
-
-  const fetchInvoices = async () => {
-    try {
-      const response = await apiRequest("/invoices");
-      const mongoInvoices = (response.invoices || []).map(mapMongoInvoice);
-
-      if (isMounted) {
-        setStoredInvoices(mongoInvoices);
-        setLoadError("");
-      }
-    } catch (error) {
-      if (isMounted) {
-        setLoadError(error.message || "Unable to load invoices.");
-      }
-    } finally {
-      if (isMounted) {
-        setLoading(false);
-      }
-    }
-  };
-
-  fetchInvoices();
-
-  return () => {
-    isMounted = false;
-  };
-}, []);
-
+  useEffect(() => {
+    loadInvoices();
+  }, []);
 
   const allInvoices = useMemo(() => {
-    const saved = storedInvoices.map((invoice) => ({
+    return storedInvoices.map((invoice) => ({
       ...invoice,
       status: getInvoiceStatus(invoice),
     }));
-
-    return [...saved, ...sampleInvoices];
   }, [storedInvoices]);
 
   const filteredInvoices = useMemo(() => {
@@ -329,6 +249,7 @@ useEffect(() => {
 
   function openEdit(invoice) {
     setSelectedInvoice(invoice);
+
     setEditForm({
       title: invoice.title || "",
       dueDate: invoice.dueDate
@@ -338,6 +259,7 @@ useEffect(() => {
       notes: invoice.notes || "",
       paymentTerms: invoice.paymentTerms || "",
     });
+
     setModalType("edit");
     setActiveMenu(null);
     setActionError("");
@@ -345,6 +267,7 @@ useEffect(() => {
 
   function closeModal() {
     if (saving) return;
+
     setModalType("");
     setSelectedInvoice(null);
     setActionError("");
@@ -410,6 +333,7 @@ useEffect(() => {
 
   return (
     <div className="min-h-screen bg-[#F3F5F8] text-[#101A2B]">
+      {/* Sidebar */}
       <aside className="fixed inset-y-0 left-0 z-20 hidden w-64 flex-col border-r border-[#E5EAF2] bg-white px-5 py-7 lg:flex">
         <Link to="/" className="mb-10 flex items-center gap-3 px-2">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#101A2B] text-white">
@@ -462,7 +386,9 @@ useEffect(() => {
         </div>
       </aside>
 
+      {/* Main Content */}
       <main className="min-h-screen lg:ml-64">
+        {/* Topbar */}
         <header className="flex items-center justify-between border-b border-[#E5EAF2] bg-white px-5 py-5 sm:px-8">
           <div>
             <p className="text-xs text-slate-400">Workspace / Invoices</p>
@@ -534,6 +460,7 @@ useEffect(() => {
             </div>
           )}
 
+          {/* Stats */}
           <div className="mb-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {stats.map((stat) => {
               const Icon = stat.icon;
@@ -550,7 +477,7 @@ useEffect(() => {
                     </div>
                   </div>
                   <p className="mt-4 text-2xl font-semibold tracking-tight">
-                    {stat.value}
+                    {loading ? "Loading..." : stat.value}
                   </p>
                   <p className="mt-1 text-xs text-slate-400">{stat.note}</p>
                 </div>
@@ -558,6 +485,7 @@ useEffect(() => {
             })}
           </div>
 
+          {/* Invoice Table */}
           <section className="overflow-hidden rounded-2xl border border-[#E5EAF2] bg-white">
             <div className="flex flex-col justify-between gap-4 border-b border-[#E5EAF2] p-5 sm:flex-row sm:items-center">
               <div>
@@ -633,7 +561,10 @@ useEffect(() => {
                 <tbody className="divide-y divide-[#EEF1F5]">
                   {loading && (
                     <tr>
-                      <td colSpan={7} className="px-6 py-14 text-center text-sm text-slate-400">
+                      <td
+                        colSpan={7}
+                        className="px-6 py-14 text-center text-sm text-slate-400"
+                      >
                         Loading invoices from MongoDB...
                       </td>
                     </tr>
@@ -669,7 +600,10 @@ useEffect(() => {
                         </td>
 
                         <td className="px-6 py-4 text-sm font-semibold">
-                          {formatMoney(invoice.totalCents, invoice.currency || "USD")}
+                          {formatMoney(
+                            invoice.totalCents,
+                            invoice.currency || "USD"
+                          )}
                         </td>
 
                         <td className="px-6 py-4">
@@ -759,12 +693,13 @@ useEffect(() => {
               <span>
                 Showing {filteredInvoices.length} of {allInvoices.length} invoices
               </span>
-              <span>MongoDB records and demo records</span>
+              <span>Live MongoDB records</span>
             </div>
           </section>
         </div>
       </main>
 
+      {/* Invoice Modal */}
       {modalType && selectedInvoice && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-[#101A2B]/40 p-4"
@@ -847,7 +782,8 @@ useEffect(() => {
                           <div>
                             <p className="font-medium">{item.description}</p>
                             <p className="mt-1 text-xs text-slate-400">
-                              Qty: {item.quantity} × {formatMoney(
+                              Qty: {item.quantity} ×{" "}
+                              {formatMoney(
                                 Math.round(Number(item.unitPrice || 0) * 100),
                                 selectedInvoice.currency || "USD"
                               )}
@@ -863,7 +799,9 @@ useEffect(() => {
                       ))}
                     </div>
                   ) : (
-                    <p className="text-sm text-slate-500">No item details available.</p>
+                    <p className="text-sm text-slate-500">
+                      No item details available.
+                    </p>
                   )}
                 </div>
 
