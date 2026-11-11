@@ -16,16 +16,32 @@ export async function apiRequest(endpoint, options = {}) {
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
     headers: {
-      "Content-Type": "application/json",
+      ...(options.body instanceof FormData
+        ? {}
+        : { "Content-Type": "application/json" }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
   });
 
-  const data = await response.json();
+  const responseText = await response.text();
+
+  let data;
+
+  try {
+    data = responseText ? JSON.parse(responseText) : {};
+  } catch {
+    console.error("Non-JSON API response:", responseText);
+
+    throw new Error(
+      `Server returned an invalid response (HTTP ${response.status}).`
+    );
+  }
 
   if (!response.ok) {
-    throw new Error(data.message || "Something went wrong.");
+    throw new Error(
+      data.message || `Request failed with status ${response.status}.`
+    );
   }
 
   return data;
