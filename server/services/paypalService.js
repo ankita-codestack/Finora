@@ -35,14 +35,50 @@ const getPayPalAccessToken = async () => {
   return data.access_token;
 };
 
+// Fetch PayPal Order Details
+const getPayPalOrderDetails = async (orderId, accessToken) => {
+  const baseURL = process.env.PAYPAL_BASE_URL;
+
+  const response = await fetch(
+    `${baseURL}/v2/checkout/orders/${encodeURIComponent(orderId)}`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    console.error("PayPal Order Fetch Error:", data);
+
+    throw new Error(
+      data.details?.[0]?.description ||
+        data.message ||
+        "Unable to fetch PayPal order."
+    );
+  }
+
+  return data;
+};
+
 // Create PayPal Order
-const createPayPalOrder = async (invoice) => {
+const createPayPalOrder = async (invoice, options = {}) => {
   const accessToken = await getPayPalAccessToken();
   const baseURL = process.env.PAYPAL_BASE_URL;
 
   const frontendURL = (
     process.env.FRONTEND_URL || "http://localhost:5173"
   ).replace(/\/+$/, "");
+
+  const returnUrl =
+    options.returnUrl || `${frontendURL}/invoices`;
+
+  const cancelUrl =
+    options.cancelUrl || `${frontendURL}/invoices?payment=cancelled`;
 
   const response = await fetch(`${baseURL}/v2/checkout/orders`, {
     method: "POST",
@@ -58,8 +94,8 @@ const createPayPalOrder = async (invoice) => {
             brand_name: "Finora",
             user_action: "PAY_NOW",
             shipping_preference: "NO_SHIPPING",
-            return_url: `${frontendURL}/`,
-            cancel_url: `${frontendURL}/`,
+            return_url: returnUrl,
+            cancel_url: cancelUrl,
           },
         },
       },
@@ -67,7 +103,7 @@ const createPayPalOrder = async (invoice) => {
         {
           reference_id: invoice._id.toString(),
           custom_id: invoice._id.toString(),
-          description: invoice.title,
+          description: invoice.title || "Finora Invoice",
           amount: {
             currency_code: invoice.currency,
             value: Number(invoice.total).toFixed(2),
@@ -81,6 +117,7 @@ const createPayPalOrder = async (invoice) => {
 
   if (!response.ok) {
     console.error("PayPal Order Error:", data);
+
     throw new Error(
       data.details?.[0]?.description ||
         data.message ||
@@ -94,27 +131,12 @@ const createPayPalOrder = async (invoice) => {
 // Capture PayPal Payment
 const capturePayPalOrder = async (orderId) => {
   const accessToken = await getPayPalAccessToken();
-  const baseURL = process.env.PAYPAL_BASE_URL;
 
-  const orderResponse = await fetch(
-    `${baseURL}/v2/checkout/orders/${encodeURIComponent(orderId)}`,
-    {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    }
+  // First fetch the latest order status
+  const orderData = await getPayPalOrderDetails(
+    orderId,
+    accessToken
   );
-
-  const orderData = await orderResponse.json();
-
-  if (!orderResponse.ok) {
-    console.error("PayPal Order Fetch Error:", orderData);
-    throw new Error(
-      orderData.message || "Unable to fetch PayPal order."
-    );
-  }
 
   if (orderData.status === "COMPLETED") {
     return orderData;
@@ -126,6 +148,9 @@ const capturePayPalOrder = async (orderId) => {
     );
   }
 
+  const baseURL = process.env.PAYPAL_BASE_URL;
+
+  // Capture the approved order
   const response = await fetch(
     `${baseURL}/v2/checkout/orders/${encodeURIComponent(orderId)}/capture`,
     {
@@ -137,22 +162,42 @@ const capturePayPalOrder = async (orderId) => {
     }
   );
 
-  const data = await response.json();
+  const captureData = await response.json();
 
   if (!response.ok) {
-    console.error("PayPal Capture Error:", data);
+    console.error("PayPal Capture Error:", captureData);
+
     throw new Error(
-      data.details?.[0]?.description ||
-        data.message ||
+      captureData.details?.[0]?.description ||
+        captureData.message ||
         "Unable to capture PayPal payment."
     );
   }
 
-  return data;
+  // Fetch the final order again after capture
+  const finalOrder = await getPayPalOrderDetails(
+    orderId,
+    accessToken
+  );
+
+  if (finalOrder.status !== "COMPLETED") {
+    console.error("PayPal Final Order Status:", {
+      orderId,
+      status: finalOrder.status,
+      captureStatus: captureData.status,
+    });
+
+    throw new Error(
+      `PayPal payment is not completed. Current status: ${finalOrder.status}`
+    );
+  }
+
+  return finalOrder;
 };
 
 module.exports = {
   getPayPalAccessToken,
+  getPayPalOrderDetails,
   createPayPalOrder,
   capturePayPalOrder,
 };

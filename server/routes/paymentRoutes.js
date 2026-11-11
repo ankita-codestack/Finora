@@ -1,6 +1,7 @@
 
 const express = require("express");
 const mongoose = require("mongoose");
+
 const Invoice = require("../models/Invoice");
 const protect = require("../middleware/authMiddleware");
 
@@ -11,7 +12,7 @@ const {
 
 const router = express.Router();
 
-// Create PayPal Order
+// Create PayPal Order (Business Owner)
 router.post("/create-order/:invoiceId", protect, async (req, res) => {
   try {
     const { invoiceId } = req.params;
@@ -60,8 +61,6 @@ router.post("/create-order/:invoiceId", protect, async (req, res) => {
     )?.href;
 
     if (!approvalUrl) {
-      console.error("PayPal order links:", order.links);
-
       throw new Error("PayPal approval link was not returned.");
     }
 
@@ -86,7 +85,7 @@ router.post("/create-order/:invoiceId", protect, async (req, res) => {
   }
 });
 
-// Capture PayPal Payment
+// Capture PayPal Payment (Business Owner)
 router.post("/capture-order/:orderId", protect, async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -164,5 +163,163 @@ router.post("/capture-order/:orderId", protect, async (req, res) => {
     });
   }
 });
+
+// Create PayPal Order (Public Client)
+router.post("/public/:token/create-order", async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    const invoice = await Invoice.findOne({
+      publicToken: token,
+      isActive: true,
+    });
+
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        message: "Invoice not found or link is invalid.",
+      });
+    }
+
+    if (["Paid", "Cancelled"].includes(invoice.status)) {
+      return res.status(400).json({
+        success: false,
+        message: "This invoice cannot be paid.",
+      });
+    }
+
+    if (invoice.currency !== "USD") {
+      return res.status(400).json({
+        success: false,
+        message: "PayPal checkout is currently available only for USD invoices.",
+      });
+    }
+
+    const frontendURL = (
+      process.env.FRONTEND_URL || "http://localhost:5173"
+    ).replace(/\/+$/, "");
+
+    const publicInvoiceURL =
+      `${frontendURL}/public/invoice/${encodeURIComponent(token)}`;
+
+    const order = await createPayPalOrder(invoice, {
+      returnUrl: `${publicInvoiceURL}?payment=success`,
+      cancelUrl: `${publicInvoiceURL}?payment=cancelled`,
+    });
+
+    const approvalUrl = order.links?.find(
+      (link) =>
+        link.rel === "payer-action" ||
+        link.rel === "approve"
+    )?.href;
+
+    if (!approvalUrl) {
+      throw new Error("PayPal approval link was not returned.");
+    }
+
+    invoice.paypalOrderId = order.id;
+    invoice.status = "Pending";
+
+    await invoice.save();
+
+    return res.status(201).json({
+      success: true,
+      message: "PayPal order created successfully.",
+      orderId: order.id,
+      approvalUrl,
+    });
+  } catch (error) {
+    console.error("Public PayPal order error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Unable to create PayPal order.",
+    });
+  }
+});
+
+// Capture PayPal Payment (Public Client)
+router.post(
+  "/public/:token/capture-order/:orderId",
+  async (req, res) => {
+    try {
+      const { token, orderId } = req.params;
+
+      const invoice = await Invoice.findOne({
+        publicToken: token,
+        paypalOrderId: orderId,
+        isActive: true,
+      });
+
+      if (!invoice) {
+        return res.status(404).json({
+          success: false,
+          message: "Invoice or PayPal order not found.",
+        });
+      }
+
+      if (invoice.status === "Paid") {
+        return res.status(200).json({
+          success: true,
+          message: "This invoice has already been paid.",
+          status: "Paid",
+        });
+      }
+
+      if (invoice.status === "Cancelled") {
+        return res.status(400).json({
+          success: false,
+          message: "This invoice has been cancelled.",
+        });
+      }
+
+      const capture = await capturePayPalOrder(orderId);
+
+      if (capture.status !== "COMPLETED") {
+        return res.status(400).json({
+          success: false,
+          message: "PayPal payment is not completed.",
+        });
+      }
+
+      const purchaseUnit = capture.purchase_units?.[0];
+      const payment = purchaseUnit?.payments?.captures?.[0];
+
+      if (
+        purchaseUnit?.custom_id !== invoice._id.toString() ||
+        payment?.status !== "COMPLETED" ||
+        payment?.amount?.currency_code !== invoice.currency ||
+        Number(payment?.amount?.value) !== Number(invoice.total)
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Payment details could not be verified.",
+        });
+      }
+
+      invoice.paypalCaptureId = payment.id;
+      invoice.paidAt = payment.create_time
+        ? new Date(payment.create_time)
+        : new Date();
+      invoice.status = "Paid";
+
+      await invoice.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Payment completed successfully.",
+        status: "Paid",
+        invoice,
+      });
+    } catch (error) {
+      console.error("Public PayPal capture error:", error);
+
+      return res.status(500).json({
+        success: false,
+        message: error.message || "Unable to capture PayPal payment.",
+      });
+    }
+  }
+);
 
 module.exports = router;

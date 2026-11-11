@@ -14,8 +14,13 @@ import {
   CheckCircle2,
   Clock3,
   AlertCircle,
-  MoreHorizontal,
   Wallet,
+  Eye,
+  Share2,
+  Copy,
+  X,
+  ExternalLink,
+  Loader2,
 } from "lucide-react";
 
 import {
@@ -58,12 +63,14 @@ const statusStyles = {
   Paid: "bg-[#E7F2EC] text-[#2E7D5B]",
   Pending: "bg-[#FFF4DF] text-[#A66B13]",
   Overdue: "bg-[#FCEAEA] text-[#C04444]",
+  Cancelled: "bg-[#F1F2F4] text-[#697586]",
 };
 
 const statusIcons = {
   Paid: CheckCircle2,
   Pending: Clock3,
   Overdue: AlertCircle,
+  Cancelled: AlertCircle,
 };
 
 function Sidebar() {
@@ -142,54 +149,61 @@ export default function Payments() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
 
+  const [selectedInvoice, setSelectedInvoice] = useState(null);
+  const [shareUrl, setShareUrl] = useState("");
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareError, setShareError] = useState("");
+  const [copySuccess, setCopySuccess] = useState(false);
+
+  const fetchPayments = async () => {
+    try {
+      setIsLoading(true);
+      setLoadError("");
+
+      const response = await apiRequest("/invoices");
+
+      const mongoInvoices = (response.invoices || []).map((invoice) => {
+        const client =
+          typeof invoice.client === "object" ? invoice.client : null;
+
+        return {
+          ...invoice,
+          id: invoice.invoiceNumber || invoice._id,
+          mongoId: invoice._id,
+          client: client?.name || "Unknown Client",
+          email: client?.email || "",
+          issueDate: invoice.issueDate
+            ? String(invoice.issueDate).slice(0, 10)
+            : "",
+          dueDate: invoice.dueDate
+            ? String(invoice.dueDate).slice(0, 10)
+            : "",
+          createdAt: invoice.createdAt,
+          paidAt: invoice.paidAt,
+          paymentDate:
+            invoice.paidAt || invoice.createdAt || invoice.issueDate,
+          currency: invoice.currency || "USD",
+          totalCents: Math.round(Number(invoice.total || 0) * 100),
+          status: invoice.status || "Pending",
+          paymentMethod:
+            invoice.paypalCaptureId || invoice.paypalOrderId
+              ? "PayPal"
+              : "Not recorded",
+          paypalOrderId: invoice.paypalOrderId || null,
+          paypalCaptureId: invoice.paypalCaptureId || null,
+        };
+      });
+
+      setInvoices(mongoInvoices);
+    } catch (error) {
+      console.error("Payments loading failed:", error);
+      setLoadError(error.message || "Unable to load payment records.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchPayments = async () => {
-      try {
-        setIsLoading(true);
-        setLoadError("");
-
-        const response = await apiRequest("/invoices");
-
-        const mongoInvoices = (response.invoices || []).map((invoice) => {
-          const client =
-            typeof invoice.client === "object" ? invoice.client : null;
-
-          return {
-            id: invoice.invoiceNumber || invoice._id,
-            mongoId: invoice._id,
-            client: client?.name || "Unknown Client",
-            email: client?.email || "",
-            issueDate: invoice.issueDate
-              ? String(invoice.issueDate).slice(0, 10)
-              : "",
-            dueDate: invoice.dueDate
-              ? String(invoice.dueDate).slice(0, 10)
-              : "",
-            createdAt: invoice.createdAt,
-            paidAt: invoice.paidAt,
-            paymentDate:
-              invoice.paidAt || invoice.createdAt || invoice.issueDate,
-            currency: invoice.currency || "USD",
-            totalCents: Math.round(Number(invoice.total || 0) * 100),
-            status: invoice.status || "Pending",
-            paymentMethod:
-              invoice.paypalCaptureId || invoice.paypalOrderId
-                ? "PayPal"
-                : "Not recorded",
-            paypalOrderId: invoice.paypalOrderId || null,
-            paypalCaptureId: invoice.paypalCaptureId || null,
-          };
-        });
-
-        setInvoices(mongoInvoices);
-      } catch (error) {
-        console.error("Payments loading failed:", error);
-        setLoadError(error.message || "Unable to load payment records.");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
     fetchPayments();
   }, []);
 
@@ -262,6 +276,72 @@ export default function Payments() {
         return dateB - dateA;
       });
   }, [records, search, activeFilter]);
+
+  const handleViewInvoice = (invoice) => {
+    setSelectedInvoice(invoice);
+    setShareUrl("");
+    setShareError("");
+    setCopySuccess(false);
+  };
+
+  const handleShareInvoice = async (invoice) => {
+    if (!invoice?.mongoId) {
+      setShareError("Invoice ID is missing. Please reload the page.");
+      return;
+    }
+
+    if (invoice.paymentStatus === "Paid" || invoice.status === "Paid") {
+      setShareError("This invoice has already been paid.");
+      return;
+    }
+
+    try {
+      setSelectedInvoice(invoice);
+      setShareLoading(true);
+      setShareError("");
+      setShareUrl("");
+      setCopySuccess(false);
+
+      const response = await apiRequest(
+        `/invoices/${invoice.mongoId}/share`,
+        {
+          method: "POST",
+        }
+      );
+
+      if (!response?.shareUrl) {
+        throw new Error("The server did not return a public invoice link.");
+      }
+
+      setShareUrl(response.shareUrl);
+    } catch (error) {
+      console.error("Invoice sharing failed:", error);
+      setShareError(error.message || "Unable to generate invoice link.");
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const handleCopyLink = async () => {
+    if (!shareUrl) return;
+
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopySuccess(true);
+    } catch (error) {
+      console.error("Copy failed:", error);
+      setShareError("Unable to copy automatically. Please select and copy the link.");
+    }
+  };
+
+  const closeModal = () => {
+    if (shareLoading) return;
+
+    setSelectedInvoice(null);
+    setShareUrl("");
+    setShareError("");
+    setCopySuccess(false);
+  };
 
   const exportCSV = () => {
     const headers = [
@@ -362,6 +442,12 @@ export default function Payments() {
           {loadError && (
             <div className="rounded-lg border border-rose-100 bg-rose-50 p-3 text-sm text-rose-600">
               {loadError}
+              <button
+                onClick={fetchPayments}
+                className="ml-3 font-semibold underline"
+              >
+                Retry
+              </button>
             </div>
           )}
 
@@ -408,7 +494,7 @@ export default function Payments() {
               <div>
                 <h3 className="font-semibold">Payment records</h3>
                 <p className="mt-1 text-xs text-[#8993A3]">
-                  Payment status and details from your saved invoices
+                  View invoices, share payment links and track client payments.
                 </p>
               </div>
 
@@ -453,7 +539,7 @@ export default function Payments() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[750px] text-left">
+              <table className="w-full min-w-[950px] text-left">
                 <thead className="bg-[#F8F9FB]">
                   <tr className="text-[11px] uppercase tracking-wider text-[#8993A3]">
                     <th className="px-5 py-4 font-semibold">Client</th>
@@ -462,7 +548,7 @@ export default function Payments() {
                     <th className="px-5 py-4 font-semibold">Amount</th>
                     <th className="px-5 py-4 font-semibold">Method</th>
                     <th className="px-5 py-4 font-semibold">Status</th>
-                    <th className="px-5 py-4"></th>
+                    <th className="px-5 py-4 text-right font-semibold">Actions</th>
                   </tr>
                 </thead>
 
@@ -525,13 +611,27 @@ export default function Payments() {
                           </td>
 
                           <td className="px-5 py-4">
-                            <button
-                              aria-label="More options"
-                              title="More options"
-                              className="rounded-md p-1.5 text-[#8993A3] hover:bg-[#F3F5F8]"
-                            >
-                              <MoreHorizontal size={17} />
-                            </button>
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                onClick={() => handleViewInvoice(payment)}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-[#E5E9F0] px-3 py-2 text-xs font-semibold text-[#465367] transition hover:border-[#24407A] hover:bg-[#F3F5F8]"
+                              >
+                                <Eye size={14} />
+                                View
+                              </button>
+
+                              {payment.paymentStatus !== "Paid" &&
+                                payment.status !== "Paid" &&
+                                payment.status !== "Cancelled" && (
+                                  <button
+                                    onClick={() => handleShareInvoice(payment)}
+                                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#24407A] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#1B3261]"
+                                  >
+                                    <Share2 size={14} />
+                                    Share
+                                  </button>
+                                )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -581,6 +681,216 @@ export default function Payments() {
           </p>
         </div>
       </main>
+
+      {selectedInvoice && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[#101A2B]/50 p-4"
+          onClick={closeModal}
+        >
+          <div
+            className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[#E8ECF2] px-6 py-5">
+              <div>
+                <p className="text-xs text-[#8993A3]">Invoice details</p>
+                <h2 className="mt-1 text-lg font-semibold text-[#101A2B]">
+                  {selectedInvoice.id}
+                </h2>
+              </div>
+
+              <button
+                onClick={closeModal}
+                className="rounded-lg p-2 text-[#697586] hover:bg-[#F3F5F8]"
+                aria-label="Close invoice details"
+              >
+                <X size={19} />
+              </button>
+            </div>
+
+            <div className="space-y-5 p-6">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-xs text-[#8993A3]">Client</p>
+                  <p className="mt-1 text-sm font-semibold">
+                    {selectedInvoice.client}
+                  </p>
+                  <p className="mt-1 break-all text-xs text-[#697586]">
+                    {selectedInvoice.email || "No email provided"}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-xs text-[#8993A3]">Payment status</p>
+                  <span
+                    className={`mt-2 inline-flex rounded-full px-3 py-1 text-xs font-medium ${
+                      statusStyles[getStatus(selectedInvoice)] ||
+                      statusStyles.Pending
+                    }`}
+                  >
+                    {getStatus(selectedInvoice)}
+                  </span>
+                </div>
+
+                <div>
+                  <p className="text-xs text-[#8993A3]">Issue date</p>
+                  <p className="mt-1 text-sm font-medium">
+                    {formatInvoiceDate(selectedInvoice.issueDate)}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-xs text-[#8993A3]">Due date</p>
+                  <p className="mt-1 text-sm font-medium">
+                    {formatInvoiceDate(selectedInvoice.dueDate)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-[#E8ECF2] p-4">
+                <p className="mb-3 text-sm font-semibold">Invoice items</p>
+
+                {Array.isArray(selectedInvoice.items) &&
+                selectedInvoice.items.length > 0 ? (
+                  <div className="space-y-3">
+                    {selectedInvoice.items.map((item, index) => (
+                      <div
+                        key={item._id || index}
+                        className="flex items-start justify-between gap-4 text-sm"
+                      >
+                        <div>
+                          <p className="font-medium text-[#101A2B]">
+                            {item.description || item.name || `Item ${index + 1}`}
+                          </p>
+                          <p className="mt-1 text-xs text-[#8993A3]">
+                            Qty: {item.quantity || 1}
+                          </p>
+                        </div>
+                        <p className="font-semibold">
+                          {formatMoney(
+                            Math.round(
+                              Number(
+                                item.amount ??
+                                item.total ??
+                                Number(item.price || 0) *
+                                  Number(item.quantity || 1)
+                              ) * 100
+                            ),
+                            selectedInvoice.currency
+                          )}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-[#8993A3]">
+                    No item details available.
+                  </p>
+                )}
+
+                <div className="mt-4 flex items-center justify-between border-t border-[#E8ECF2] pt-4">
+                  <p className="font-semibold">Total amount</p>
+                  <p className="text-lg font-bold text-[#24407A]">
+                    {formatMoney(
+                      selectedInvoice.totalCents,
+                      selectedInvoice.currency
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              {selectedInvoice.notes && (
+                <div>
+                  <p className="text-xs font-semibold text-[#8993A3]">Notes</p>
+                  <p className="mt-1 text-sm text-[#465367]">
+                    {selectedInvoice.notes}
+                  </p>
+                </div>
+              )}
+
+              {selectedInvoice.paypalOrderId && (
+                <div className="rounded-lg bg-[#F8F9FB] p-3">
+                  <p className="text-xs text-[#8993A3]">PayPal Order ID</p>
+                  <p className="mt-1 break-all text-xs font-medium">
+                    {selectedInvoice.paypalOrderId}
+                  </p>
+                </div>
+              )}
+
+              {selectedInvoice.paymentStatus !== "Paid" &&
+                selectedInvoice.status !== "Paid" &&
+                selectedInvoice.status !== "Cancelled" && (
+                  <div className="border-t border-[#E8ECF2] pt-5">
+                    <button
+                      onClick={() => handleShareInvoice(selectedInvoice)}
+                      disabled={shareLoading}
+                      className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#24407A] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#1B3261] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {shareLoading ? (
+                        <Loader2 size={17} className="animate-spin" />
+                      ) : (
+                        <Share2 size={17} />
+                      )}
+                      {shareLoading
+                        ? "Generating link..."
+                        : "Generate Public Invoice Link"}
+                    </button>
+
+                    {shareUrl && (
+                      <div className="mt-4 rounded-xl border border-[#DCE5F0] bg-[#F8F9FB] p-4">
+                        <p className="text-sm font-semibold text-[#101A2B]">
+                          Invoice link generated
+                        </p>
+                        <p className="mt-1 text-xs text-[#697586]">
+                          Send this link to your client so they can view and pay this invoice.
+                        </p>
+
+                        <div className="mt-3 flex gap-2">
+                          <input
+                            readOnly
+                            value={shareUrl}
+                            onFocus={(event) => event.target.select()}
+                            className="min-w-0 flex-1 rounded-lg border border-[#E5E9F0] bg-white px-3 py-2 text-xs text-[#465367] outline-none"
+                          />
+
+                          <button
+                            onClick={handleCopyLink}
+                            className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[#24407A] px-3 py-2 text-xs font-semibold text-white hover:bg-[#1B3261]"
+                          >
+                            <Copy size={14} />
+                            {copySuccess ? "Copied" : "Copy"}
+                          </button>
+                        </div>
+
+                        <a
+                          href={shareUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-[#24407A] hover:underline"
+                        >
+                          Open public invoice
+                          <ExternalLink size={12} />
+                        </a>
+                      </div>
+                    )}
+
+                    {shareError && (
+                      <p className="mt-3 rounded-lg bg-rose-50 p-3 text-xs text-rose-600">
+                        {shareError}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+              {selectedInvoice.paymentStatus === "Paid" && (
+                <div className="rounded-lg bg-[#E7F2EC] p-4 text-sm font-medium text-[#2E7D5B]">
+                  This invoice has been paid successfully.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

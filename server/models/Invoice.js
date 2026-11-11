@@ -1,3 +1,4 @@
+
 const mongoose = require("mongoose");
 
 const invoiceSchema = new mongoose.Schema(
@@ -32,19 +33,16 @@ const invoiceSchema = new mongoose.Schema(
           type: String,
           required: true,
         },
-
         quantity: {
           type: Number,
           required: true,
           min: 1,
         },
-
         unitPrice: {
           type: Number,
           required: true,
           min: 0,
         },
-
         amount: {
           type: Number,
           required: true,
@@ -109,31 +107,62 @@ const invoiceSchema = new mongoose.Schema(
     },
 
     isActive: {
-  type: Boolean,
-  default: true,
-},
+      type: Boolean,
+      default: true,
+    },
 
-  paypalOrderId: {
-  type: String,
-  default: null,
-},
+    paypalOrderId: {
+      type: String,
+      default: null,
+    },
 
-paypalCaptureId: {
-  type: String,
-  default: null,
-},
+    paypalCaptureId: {
+      type: String,
+      default: null,
+    },
 
-paidAt: {
-  type: Date,
-  default: null,
-},
+    paidAt: {
+      type: Date,
+      default: null,
+    },
+
+    // Public invoice sharing
+    publicToken: {
+      type: String,
+      trim: true,
+    },
+
+    sentTo: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: null,
+    },
+
+    sentAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,
   }
 );
 
-invoiceSchema.index({ user: 1, invoiceNumber: 1 }, { unique: true });
+invoiceSchema.index(
+  { user: 1, invoiceNumber: 1 },
+  { unique: true }
+);
+
+invoiceSchema.index(
+  { publicToken: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      publicToken: { $type: "string" },
+    },
+  }
+);
 
 const Invoice = mongoose.model("Invoice", invoiceSchema);
 
