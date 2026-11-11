@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Wallet,
@@ -13,11 +14,9 @@ import {
   ArrowRight,
   Info,
 } from "lucide-react";
-import {
-  saveInvoice,
-  generateInvoiceId,
-  formatMoney,
-} from "../lib/invoiceStorage";
+
+import { formatMoney } from "../lib/invoiceStorage";
+import { apiRequest } from "../lib/api";
 
 const today = new Date().toLocaleDateString("en-CA");
 
@@ -31,8 +30,11 @@ const initialItem = () => ({
 export default function CreateInvoice() {
   const navigate = useNavigate();
 
-  const [client, setClient] = useState("");
-  const [email, setEmail] = useState("");
+  const [clients, setClients] = useState([]);
+  const [selectedClient, setSelectedClient] = useState("");
+  const [isLoadingClients, setIsLoadingClients] = useState(true);
+  const [clientLoadError, setClientLoadError] = useState("");
+
   const [issueDate, setIssueDate] = useState(today);
   const [dueDate, setDueDate] = useState(today);
   const [currency, setCurrency] = useState("USD");
@@ -41,6 +43,36 @@ export default function CreateInvoice() {
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+
+  const selectedClientData = clients.find(
+    (item) => item._id === selectedClient
+  );
+
+  useEffect(() => {
+    const fetchClients = async () => {
+      try {
+        setClientLoadError("");
+
+        const result = await apiRequest("/clients");
+
+        const activeClients = (result.clients || []).filter(
+          (item) =>
+            item.isActive !== false &&
+            item.status !== "Inactive"
+        );
+
+        setClients(activeClients);
+      } catch (err) {
+        setClientLoadError(
+          err.message || "Unable to load clients."
+        );
+      } finally {
+        setIsLoadingClients(false);
+      }
+    };
+
+    fetchClients();
+  }, []);
 
   const calculations = useMemo(() => {
     const subtotalCents = items.reduce((total, item) => {
@@ -88,20 +120,12 @@ export default function CreateInvoice() {
     );
   };
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
     setError("");
 
-    const cleanClient = client.trim();
-    const cleanEmail = email.trim().toLowerCase();
-
-    if (!cleanClient) {
-      setError("Please enter the client's name.");
-      return;
-    }
-
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
-      setError("Please enter a valid email address.");
+    if (!selectedClientData) {
+      setError("Please select a client.");
       return;
     }
 
@@ -147,36 +171,51 @@ export default function CreateInvoice() {
       return;
     }
 
-    const invoice = {
-      id: generateInvoiceId(),
-      client: cleanClient,
-      email: cleanEmail,
+    const invoiceNumber = `FIN-${Date.now()}`;
+
+    const payload = {
+      client: selectedClientData._id,
+      invoiceNumber,
+      title: items[0].description.trim(),
+      items: items.map((item) => {
+        const quantity = Number(item.quantity);
+        const unitPrice = Number(item.unitPrice);
+
+        return {
+          description: item.description.trim(),
+          quantity,
+          unitPrice,
+          amount: Math.round(quantity * unitPrice * 100) / 100,
+        };
+      }),
+      subtotal: calculations.subtotalCents / 100,
+      tax: calculations.taxCents / 100,
+      total: calculations.totalCents / 100,
+      currency,
       issueDate,
       dueDate,
-      currency,
-      items: items.map((item) => ({
-        description: item.description.trim(),
-        quantity: Number(item.quantity),
-        unitPriceCents: Math.round(Number(item.unitPrice) * 100),
-      })),
-      taxRate: parsedTax,
-      subtotalCents: calculations.subtotalCents,
-      taxCents: calculations.taxCents,
-      totalCents: calculations.totalCents,
       notes: notes.trim(),
-      status: "Pending",
-      createdAt: new Date().toISOString(),
+      paymentTerms: "",
+      aiGenerated: false,
     };
 
-    setIsSaving(true);
-
     try {
-      saveInvoice(invoice);
+      setIsSaving(true);
+
+      const result = await apiRequest("/invoices", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+
       navigate("/invoices", {
-        state: { message: "Invoice created successfully." },
+        state: {
+          message:
+            result.message || "Invoice created successfully.",
+        },
       });
     } catch (saveError) {
       setError(saveError.message || "Unable to save invoice.");
+    } finally {
       setIsSaving(false);
     }
   };
@@ -287,15 +326,42 @@ export default function CreateInvoice() {
 
               <div className="grid gap-5 sm:grid-cols-2">
                 <label className={labelClass}>
-                  Client name
-                  <input
+                  Select client
+                  <select
                     className={inputClass}
-                    value={client}
-                    onChange={(e) => setClient(e.target.value)}
-                    placeholder="e.g. Olivia Rhye"
-                    maxLength={100}
+                    value={selectedClient}
+                    onChange={(e) => setSelectedClient(e.target.value)}
                     required
-                  />
+                    disabled={isLoadingClients || clients.length === 0}
+                  >
+                    <option value="">
+                      {isLoadingClients
+                        ? "Loading clients..."
+                        : clients.length === 0
+                          ? "No active clients available"
+                          : "Choose a client"}
+                    </option>
+
+                    {clients.map((item) => (
+                      <option key={item._id} value={item._id}>
+                        {item.name} — {item.company || item.email}
+                      </option>
+                    ))}
+                  </select>
+
+                  {clientLoadError && (
+                    <p className="mt-2 text-xs text-red-600">
+                      {clientLoadError}
+                    </p>
+                  )}
+
+                  {!isLoadingClients &&
+                    !clientLoadError &&
+                    clients.length === 0 && (
+                      <p className="mt-2 text-xs text-slate-500">
+                        Add an active client from the Clients page first.
+                      </p>
+                    )}
                 </label>
 
                 <label className={labelClass}>
@@ -308,11 +374,9 @@ export default function CreateInvoice() {
                     <input
                       className={`${inputClass} pl-10`}
                       type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="client@example.com"
-                      maxLength={254}
-                      required
+                      value={selectedClientData?.email || ""}
+                      placeholder="Client email"
+                      readOnly
                     />
                   </div>
                 </label>
@@ -549,8 +613,8 @@ export default function CreateInvoice() {
             <div className="flex items-start gap-3 rounded-xl border border-[#DFE6F3] bg-[#DFE6F3]/50 p-4 text-sm text-[#24407A]">
               <Info size={18} className="mt-0.5 shrink-0" />
               <p>
-                This creates a draft invoice in this browser only. It does not
-                send an email or collect a payment.
+                This invoice will be saved to your Finora account. Payment
+                can be collected separately through PayPal.
               </p>
             </div>
 
@@ -573,7 +637,7 @@ export default function CreateInvoice() {
 
               <button
                 type="submit"
-                disabled={isSaving}
+                disabled={isSaving || isLoadingClients || clients.length === 0}
                 className="flex items-center justify-center gap-2 rounded-xl bg-[#24407A] px-6 py-3 text-sm font-semibold text-white transition hover:bg-[#1B3262] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isSaving ? "Saving..." : "Create invoice"}

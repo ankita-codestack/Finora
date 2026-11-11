@@ -1,3 +1,4 @@
+
 const mongoose = require("mongoose");
 
 const clientSchema = new mongoose.Schema(
@@ -38,6 +39,12 @@ const clientSchema = new mongoose.Schema(
     notes: {
       type: String,
       trim: true,
+    },
+
+    status: {
+      type: String,
+      enum: ["Active", "Inactive"],
+      default: "Active",
     },
 
     isActive: {

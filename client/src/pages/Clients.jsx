@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+
+import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -21,11 +22,12 @@ import {
 
 import {
   getStoredClients,
-  saveClients,
-  generateClientId,
 } from "../lib/clientStorage";
 
 import { getStoredInvoices } from "../lib/invoiceStorage";
+import { apiRequest } from "../lib/api";
+
+const MIGRATION_KEY = "finora.clients.migrated.v1";
 
 const demoClients = [
   {
@@ -120,6 +122,32 @@ const getInitials = (name = "") =>
     .map((part) => part[0].toUpperCase())
     .join("");
 
+function mapApiClient(client) {
+  return {
+    id: client._id,
+    name: client.name || "",
+    email: client.email || "",
+    company: client.company || "",
+    phone: client.phone || "",
+    address: client.address || "",
+    notes: client.notes || "",
+    status: client.status || "Active",
+    isDemo: false,
+  };
+}
+
+function getMigrationMap() {
+  try {
+    return JSON.parse(localStorage.getItem(MIGRATION_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveMigrationMap(map) {
+  localStorage.setItem(MIGRATION_KEY, JSON.stringify(map));
+}
+
 function getClientInvoiceStats(client, invoices) {
   if (client.isDemo) {
     return {
@@ -138,19 +166,19 @@ function getClientInvoiceStats(client, invoices) {
 
   const spent = clientInvoices
     .filter((invoice) => invoice.status === "Paid")
-    .reduce((sum, invoice) => sum + invoice.totalCents, 0);
+    .reduce((sum, invoice) => sum + (invoice.totalCents || 0), 0);
 
   const due = clientInvoices
     .filter((invoice) => {
       const isUnpaid =
         invoice.status === "Pending" || invoice.status === "Overdue";
 
-      return isUnpaid || (
-        invoice.status !== "Paid" &&
-        invoice.dueDate < today
+      return (
+        isUnpaid ||
+        (invoice.status !== "Paid" && invoice.dueDate < today)
       );
     })
-    .reduce((sum, invoice) => sum + invoice.totalCents, 0);
+    .reduce((sum, invoice) => sum + (invoice.totalCents || 0), 0);
 
   return {
     invoiceCount: clientInvoices.length,
@@ -160,8 +188,12 @@ function getClientInvoiceStats(client, invoices) {
 }
 
 export default function Clients() {
-  const [clients, setClients] = useState(() => getStoredClients());
+  const [clients, setClients] = useState([]);
   const [invoices] = useState(() => getStoredInvoices());
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [pageError, setPageError] = useState("");
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -176,6 +208,87 @@ export default function Clients() {
     company: "",
     status: "Active",
   });
+
+  // Fetch MongoDB clients and safely migrate old LocalStorage clients
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadClients = async () => {
+      try {
+        setLoading(true);
+        setPageError("");
+
+        const result = await apiRequest("/clients");
+
+        let remoteClients = (result.clients || []).map(mapApiClient);
+        const legacyClients = getStoredClients();
+        const migrationMap = getMigrationMap();
+
+        for (const legacy of legacyClients) {
+          // Already migrated
+          if (
+            migrationMap[legacy.id] &&
+            remoteClients.some(
+              (client) => client.id === migrationMap[legacy.id]
+            )
+          ) {
+            continue;
+          }
+
+          // Reuse an existing MongoDB client with the same email
+          const existingClient = remoteClients.find(
+            (client) =>
+              client.email.toLowerCase() === legacy.email.toLowerCase()
+          );
+
+          if (existingClient) {
+            migrationMap[legacy.id] = existingClient.id;
+            saveMigrationMap(migrationMap);
+            continue;
+          }
+
+          // Migrate the old browser client to MongoDB
+          const createdResult = await apiRequest("/clients", {
+            method: "POST",
+            body: JSON.stringify({
+              name: legacy.name,
+              email: legacy.email,
+              company: legacy.company,
+              status: legacy.status,
+              isActive: true,
+            }),
+          });
+
+          const newClient = mapApiClient(createdResult.client);
+
+          remoteClients = [newClient, ...remoteClients];
+
+          migrationMap[legacy.id] = newClient.id;
+          saveMigrationMap(migrationMap);
+        }
+
+        if (!cancelled) {
+          setClients(remoteClients);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setPageError(
+            err.message || "Unable to load clients from the server."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadClients();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const allClients = useMemo(
     () => [...demoClients, ...clients],
@@ -232,7 +345,7 @@ export default function Clients() {
     setActiveMenu(null);
   };
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
     setError("");
 
@@ -261,31 +374,54 @@ export default function Clients() {
       return;
     }
 
-    const updatedClient = {
-      id: editingClient?.id || generateClientId(),
+    const payload = {
       name,
       email,
       company,
       status: form.status,
+      isActive: true,
     };
 
-    const updatedClients = editingClient
-      ? clients.map((client) =>
-          client.id === editingClient.id ? updatedClient : client
-        )
-      : [...clients, updatedClient];
-
     try {
-      saveClients(updatedClients);
-      setClients(updatedClients);
+      setSaving(true);
+
+      if (editingClient) {
+        const result = await apiRequest(
+          `/clients/${editingClient.id}`,
+          {
+            method: "PUT",
+            body: JSON.stringify(payload),
+          }
+        );
+
+        const updatedClient = mapApiClient(result.client);
+
+        setClients((previous) =>
+          previous.map((client) =>
+            client.id === updatedClient.id ? updatedClient : client
+          )
+        );
+      } else {
+        const result = await apiRequest("/clients", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+
+        const newClient = mapApiClient(result.client);
+
+        setClients((previous) => [newClient, ...previous]);
+      }
+
       setShowModal(false);
       setEditingClient(null);
     } catch (err) {
       setError(err.message || "Unable to save client.");
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleDelete = (client) => {
+  const handleDelete = async (client) => {
     setActiveMenu(null);
 
     if (client.isDemo) return;
@@ -296,15 +432,16 @@ export default function Clients() {
 
     if (!confirmed) return;
 
-    const updatedClients = clients.filter(
-      (item) => item.id !== client.id
-    );
-
     try {
-      saveClients(updatedClients);
-      setClients(updatedClients);
-    } catch {
-      alert("Unable to delete client. Please try again.");
+      await apiRequest(`/clients/${client.id}`, {
+        method: "DELETE",
+      });
+
+      setClients((previous) =>
+        previous.filter((item) => item.id !== client.id)
+      );
+    } catch (err) {
+      alert(err.message || "Unable to delete client. Please try again.");
     }
   };
 
@@ -404,12 +541,19 @@ export default function Clients() {
 
             <button
               onClick={openAddModal}
-              className="inline-flex items-center justify-center gap-2 bg-[#24407A] hover:bg-[#1B3261] text-white px-5 py-3 rounded-xl text-sm font-medium transition"
+              disabled={loading}
+              className="inline-flex items-center justify-center gap-2 bg-[#24407A] hover:bg-[#1B3261] disabled:opacity-50 text-white px-5 py-3 rounded-xl text-sm font-medium transition"
             >
               <Plus size={17} />
               Add client
             </button>
           </div>
+
+          {pageError && (
+            <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {pageError}
+            </div>
+          )}
 
           {/* Stats */}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-7">
@@ -464,7 +608,7 @@ export default function Clients() {
               <div>
                 <h3 className="font-semibold">All clients</h3>
                 <p className="text-xs text-[#8993A5] mt-1">
-                  {filteredClients.length} clients found
+                  {loading ? "Loading clients..." : `${filteredClients.length} clients found`}
                 </p>
               </div>
 
@@ -607,7 +751,7 @@ export default function Clients() {
                     </tr>
                   ))}
 
-                  {filteredClients.length === 0 && (
+                  {!loading && filteredClients.length === 0 && (
                     <tr>
                       <td
                         colSpan="6"
@@ -617,12 +761,23 @@ export default function Clients() {
                       </td>
                     </tr>
                   )}
+
+                  {loading && (
+                    <tr>
+                      <td
+                        colSpan="6"
+                        className="text-center py-14 text-sm text-[#8993A5]"
+                      >
+                        Loading your clients...
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
 
             <div className="px-6 py-4 border-t border-[#E5E9F0] text-xs text-[#8993A5]">
-              Demo clients are sample records. Newly added clients are saved in this browser.
+              Demo clients are sample records. Your saved clients are stored in your Finora account.
             </div>
           </section>
         </div>
@@ -724,16 +879,22 @@ export default function Clients() {
                 <button
                   type="button"
                   onClick={() => setShowModal(false)}
-                  className="flex-1 px-4 py-3 rounded-xl border border-[#E5E9F0] text-sm font-medium hover:bg-[#F8F9FB]"
+                  disabled={saving}
+                  className="flex-1 px-4 py-3 rounded-xl border border-[#E5E9F0] text-sm font-medium hover:bg-[#F8F9FB] disabled:opacity-50"
                 >
                   Cancel
                 </button>
 
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-3 rounded-xl bg-[#24407A] hover:bg-[#1B3261] text-white text-sm font-medium"
+                  disabled={saving}
+                  className="flex-1 px-4 py-3 rounded-xl bg-[#24407A] hover:bg-[#1B3261] disabled:opacity-50 text-white text-sm font-medium"
                 >
-                  {editingClient ? "Save changes" : "Add client"}
+                  {saving
+                    ? "Saving..."
+                    : editingClient
+                      ? "Save changes"
+                      : "Add client"}
                 </button>
               </div>
             </form>

@@ -1,5 +1,5 @@
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -19,10 +19,11 @@ import {
 } from "lucide-react";
 
 import {
-  getStoredInvoices,
   formatMoney,
   formatInvoiceDate,
 } from "../lib/invoiceStorage";
+
+import { apiRequest } from "../lib/api";
 
 const navItems = [
   { label: "Overview", icon: LayoutDashboard, path: "/dashboard" },
@@ -121,9 +122,7 @@ function StatCard({ title, amount, note, icon: Icon, iconBg, iconColor }) {
     <div className="rounded-xl border border-[#E8ECF2] bg-white p-5">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium text-[#697586]">{title}</p>
-        <div
-          className={`flex h-9 w-9 items-center justify-center rounded-lg ${iconBg}`}
-        >
+        <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${iconBg}`}>
           <Icon size={18} className={iconColor} />
         </div>
       </div>
@@ -136,40 +135,92 @@ function StatCard({ title, amount, note, icon: Icon, iconBg, iconColor }) {
 }
 
 export default function Payments() {
-  const [invoices] = useState(() => getStoredInvoices());
+  const [invoices, setInvoices] = useState([]);
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState("All");
+  const [currency, setCurrency] = useState("USD");
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+
+  useEffect(() => {
+    const fetchPayments = async () => {
+      try {
+        setIsLoading(true);
+        setLoadError("");
+
+        const response = await apiRequest("/invoices");
+
+        const mongoInvoices = (response.invoices || []).map((invoice) => {
+          const client =
+            typeof invoice.client === "object" ? invoice.client : null;
+
+          return {
+            id: invoice.invoiceNumber || invoice._id,
+            mongoId: invoice._id,
+            client: client?.name || "Unknown Client",
+            email: client?.email || "",
+            issueDate: invoice.issueDate
+              ? String(invoice.issueDate).slice(0, 10)
+              : "",
+            dueDate: invoice.dueDate
+              ? String(invoice.dueDate).slice(0, 10)
+              : "",
+            createdAt: invoice.createdAt,
+            paidAt: invoice.paidAt,
+            paymentDate:
+              invoice.paidAt || invoice.createdAt || invoice.issueDate,
+            currency: invoice.currency || "USD",
+            totalCents: Math.round(Number(invoice.total || 0) * 100),
+            status: invoice.status || "Pending",
+            paymentMethod:
+              invoice.paypalCaptureId || invoice.paypalOrderId
+                ? "PayPal"
+                : "Not recorded",
+            paypalOrderId: invoice.paypalOrderId || null,
+            paypalCaptureId: invoice.paypalCaptureId || null,
+          };
+        });
+
+        setInvoices(mongoInvoices);
+      } catch (error) {
+        console.error("Payments loading failed:", error);
+        setLoadError(error.message || "Unable to load payment records.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchPayments();
+  }, []);
 
   const currencies = useMemo(() => {
     const values = [
       ...new Set(invoices.map((invoice) => invoice.currency).filter(Boolean)),
     ];
+
     return values.length ? values : ["USD"];
   }, [invoices]);
 
-  const [currency, setCurrency] = useState(currencies[0]);
+  const selectedCurrency = currencies.includes(currency)
+    ? currency
+    : currencies[0];
 
   const currencyInvoices = useMemo(
-    () => invoices.filter((invoice) => invoice.currency === currency),
-    [invoices, currency]
+    () => invoices.filter((invoice) => invoice.currency === selectedCurrency),
+    [invoices, selectedCurrency]
   );
 
   const records = useMemo(() => {
     return currencyInvoices.map((invoice) => ({
       ...invoice,
       paymentStatus: getStatus(invoice),
-      paymentDate: invoice.createdAt || invoice.issueDate,
     }));
   }, [currencyInvoices]);
 
   const summary = useMemo(() => {
     const paid = records.filter((item) => item.paymentStatus === "Paid");
-    const pending = records.filter(
-      (item) => item.paymentStatus === "Pending"
-    );
-    const overdue = records.filter(
-      (item) => item.paymentStatus === "Overdue"
-    );
+    const pending = records.filter((item) => item.paymentStatus === "Pending");
+    const overdue = records.filter((item) => item.paymentStatus === "Overdue");
 
     return {
       received: paid.reduce((sum, item) => sum + item.totalCents, 0),
@@ -197,7 +248,11 @@ export default function Payments() {
             item.client,
             item.email,
             item.paymentStatus,
-          ].some((value) => String(value || "").toLowerCase().includes(query));
+            item.paymentMethod,
+            item.paypalOrderId,
+          ].some((value) =>
+            String(value || "").toLowerCase().includes(query)
+          );
 
         return matchesFilter && matchesSearch;
       })
@@ -218,6 +273,8 @@ export default function Payments() {
       "Amount",
       "Status",
       "Payment Method",
+      "PayPal Order ID",
+      "PayPal Capture ID",
     ];
 
     const rows = filteredRecords.map((item) => [
@@ -225,10 +282,12 @@ export default function Payments() {
       item.client,
       item.email,
       item.paymentDate || "",
-      currency,
+      selectedCurrency,
       (item.totalCents / 100).toFixed(2),
       item.paymentStatus,
-      "Not recorded",
+      item.paymentMethod,
+      item.paypalOrderId || "",
+      item.paypalCaptureId || "",
     ]);
 
     const escapeCSV = (value) =>
@@ -245,7 +304,7 @@ export default function Payments() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `finora-payments-${currency.toLowerCase()}.csv`;
+    link.download = `finora-payments-${selectedCurrency.toLowerCase()}.csv`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -288,7 +347,7 @@ export default function Payments() {
             </div>
 
             <select
-              value={currency}
+              value={selectedCurrency}
               onChange={(event) => setCurrency(event.target.value)}
               className="rounded-lg border border-[#E5E9F0] bg-white px-3 py-2 text-sm text-[#465367] outline-none focus:border-[#24407A]"
             >
@@ -300,11 +359,16 @@ export default function Payments() {
             </select>
           </div>
 
-          {/* Summary cards */}
+          {loadError && (
+            <div className="rounded-lg border border-rose-100 bg-rose-50 p-3 text-sm text-rose-600">
+              {loadError}
+            </div>
+          )}
+
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <StatCard
               title="Total received"
-              amount={formatMoney(summary.received, currency)}
+              amount={isLoading ? "Loading..." : formatMoney(summary.received, selectedCurrency)}
               note="From paid invoices"
               icon={ArrowDownLeft}
               iconBg="bg-[#E7F2EC]"
@@ -313,7 +377,7 @@ export default function Payments() {
 
             <StatCard
               title="Awaiting payment"
-              amount={formatMoney(summary.awaiting, currency)}
+              amount={isLoading ? "Loading..." : formatMoney(summary.awaiting, selectedCurrency)}
               note="Pending + overdue"
               icon={Clock3}
               iconBg="bg-[#FFF4DF]"
@@ -322,7 +386,7 @@ export default function Payments() {
 
             <StatCard
               title="Successful"
-              amount={summary.successfulCount}
+              amount={isLoading ? "..." : summary.successfulCount}
               note="Paid invoices"
               icon={CheckCircle2}
               iconBg="bg-[#E7F2EC]"
@@ -331,7 +395,7 @@ export default function Payments() {
 
             <StatCard
               title="Overdue invoices"
-              amount={summary.overdueCount}
+              amount={isLoading ? "..." : summary.overdueCount}
               note="Require follow-up"
               icon={AlertCircle}
               iconBg="bg-[#FCEAEA]"
@@ -339,13 +403,12 @@ export default function Payments() {
             />
           </div>
 
-          {/* Transaction history */}
           <section className="overflow-hidden rounded-xl border border-[#E8ECF2] bg-white">
             <div className="flex flex-col gap-4 border-b border-[#E8ECF2] p-5">
               <div>
                 <h3 className="font-semibold">Payment records</h3>
                 <p className="mt-1 text-xs text-[#8993A3]">
-                  Payment status derived from your saved invoices
+                  Payment status and details from your saved invoices
                 </p>
               </div>
 
@@ -404,14 +467,20 @@ export default function Payments() {
                 </thead>
 
                 <tbody className="divide-y divide-[#EDF0F4]">
-                  {filteredRecords.length > 0 ? (
+                  {isLoading ? (
+                    <tr>
+                      <td colSpan="7" className="px-5 py-14 text-center text-sm text-[#8993A3]">
+                        Loading payment records...
+                      </td>
+                    </tr>
+                  ) : filteredRecords.length > 0 ? (
                     filteredRecords.map((payment) => {
                       const StatusIcon =
                         statusIcons[payment.paymentStatus] || Clock3;
 
                       return (
                         <tr
-                          key={payment.id}
+                          key={payment.mongoId}
                           className="transition hover:bg-[#FAFBFC]"
                         >
                           <td className="px-5 py-4">
@@ -419,7 +488,7 @@ export default function Payments() {
                               {payment.client}
                             </p>
                             <p className="mt-1 text-xs text-[#8993A3]">
-                              {payment.email}
+                              {payment.email || "—"}
                             </p>
                           </td>
 
@@ -428,21 +497,26 @@ export default function Payments() {
                           </td>
 
                           <td className="px-5 py-4 text-xs text-[#697586]">
-                            {formatInvoiceDate(payment.issueDate)}
+                            {formatInvoiceDate(
+                              payment.paymentStatus === "Paid"
+                                ? payment.paidAt || payment.issueDate
+                                : payment.issueDate
+                            )}
                           </td>
 
                           <td className="px-5 py-4 text-sm font-semibold">
-                            {formatMoney(payment.totalCents, currency)}
+                            {formatMoney(payment.totalCents, selectedCurrency)}
                           </td>
 
                           <td className="px-5 py-4 text-xs text-[#697586]">
-                            Not recorded
+                            {payment.paymentMethod}
                           </td>
 
                           <td className="px-5 py-4">
                             <span
                               className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${
-                                statusStyles[payment.paymentStatus]
+                                statusStyles[payment.paymentStatus] ||
+                                statusStyles.Pending
                               }`}
                             >
                               <StatusIcon size={12} />
@@ -498,12 +572,12 @@ export default function Payments() {
               <p className="text-xs text-[#8993A3]">
                 Showing {filteredRecords.length} of {records.length} records
               </p>
-              <span className="text-xs text-[#8993A3]">{currency}</span>
+              <span className="text-xs text-[#8993A3]">{selectedCurrency}</span>
             </div>
           </section>
 
           <p className="text-center text-[11px] text-[#A0A8B5]">
-            Finora payment records · PayPal Sandbox integration coming next
+            Finora payment records · MongoDB synced
           </p>
         </div>
       </main>

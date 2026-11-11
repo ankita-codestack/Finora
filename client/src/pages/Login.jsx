@@ -1,6 +1,6 @@
 
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   ArrowRight,
@@ -11,16 +11,54 @@ import {
   Wallet,
   Sparkles,
 } from "lucide-react";
+import { apiRequest } from "../lib/api";
 
 export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const navigate = useNavigate();
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+
+    try {
+      const data = await apiRequest("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      });
+
+      if (!data.success) {
+        throw new Error(data.message || "Login failed.");
+      }
+
+      if (rememberMe) {
+        localStorage.setItem("finoraToken", data.token);
+        sessionStorage.removeItem("finoraToken");
+      } else {
+        sessionStorage.setItem("finoraToken", data.token);
+        localStorage.removeItem("finoraToken");
+      }
+
+      localStorage.setItem("finoraUser", JSON.stringify(data.user));
+
+      navigate("/dashboard");
+    } catch (err) {
+      setError(err.message || "Unable to login. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#F3F5F8] text-[#101A2B]">
       <div className="grid min-h-screen lg:grid-cols-2">
-
-        {/* Left Section */}
         <section className="relative hidden overflow-hidden bg-[#101A2B] p-12 text-white lg:flex lg:flex-col lg:justify-between xl:p-16">
           <div className="absolute -right-32 top-20 h-96 w-96 rounded-full bg-[#24407A]/50 blur-[100px]" />
           <div className="absolute -bottom-32 -left-20 h-80 w-80 rounded-full bg-[#2E7D5B]/20 blur-[100px]" />
@@ -74,10 +112,8 @@ export default function Login() {
           </p>
         </section>
 
-        {/* Right Section */}
         <section className="flex min-h-screen items-center justify-center px-6 py-12 sm:px-12">
           <div className="w-full max-w-md">
-
             <Link
               to="/"
               className="mb-12 inline-flex items-center gap-2 text-sm font-medium text-[#647187] transition hover:text-[#24407A]"
@@ -109,16 +145,9 @@ export default function Login() {
               </p>
             </div>
 
-            <form
-              className="mt-9 space-y-5"
-              onSubmit={(e) => e.preventDefault()}
-            >
-              {/* Email */}
+            <form className="mt-9 space-y-5" onSubmit={handleLogin}>
               <div>
-                <label
-                  htmlFor="email"
-                  className="mb-2 block text-sm font-medium"
-                >
+                <label htmlFor="email" className="mb-2 block text-sm font-medium">
                   Email address
                 </label>
 
@@ -130,6 +159,8 @@ export default function Login() {
                   <input
                     id="email"
                     type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@example.com"
                     required
                     className="w-full rounded-lg border border-[#DCE2EB] bg-white py-3.5 pl-11 pr-4 text-sm outline-none transition placeholder:text-[#A0A9B7] focus:border-[#24407A] focus:ring-4 focus:ring-[#24407A]/10"
@@ -137,22 +168,11 @@ export default function Login() {
                 </div>
               </div>
 
-              {/* Password */}
               <div>
                 <div className="mb-2 flex items-center justify-between">
-                  <label
-                    htmlFor="password"
-                    className="text-sm font-medium"
-                  >
+                  <label htmlFor="password" className="text-sm font-medium">
                     Password
                   </label>
-
-                  <button
-                    type="button"
-                    className="text-xs font-semibold text-[#24407A] hover:underline"
-                  >
-                    Forgot password?
-                  </button>
                 </div>
 
                 <div className="relative">
@@ -164,6 +184,8 @@ export default function Login() {
                   <input
                     id="password"
                     type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
                     placeholder="Enter your password"
                     required
                     className="w-full rounded-lg border border-[#DCE2EB] bg-white py-3.5 pl-11 pr-12 text-sm outline-none transition placeholder:text-[#A0A9B7] focus:border-[#24407A] focus:ring-4 focus:ring-[#24407A]/10"
@@ -173,18 +195,12 @@ export default function Login() {
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-4 top-1/2 -translate-y-1/2 text-[#8490A2] hover:text-[#24407A]"
-                    aria-label={showPassword ? "Hide password" : "Show password"}
                   >
-                    {showPassword ? (
-                      <EyeOff size={18} />
-                    ) : (
-                      <Eye size={18} />
-                    )}
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                   </button>
                 </div>
               </div>
 
-              {/* Remember Me */}
               <div className="flex items-center gap-2">
                 <input
                   id="remember"
@@ -193,20 +209,24 @@ export default function Login() {
                   onChange={(e) => setRememberMe(e.target.checked)}
                   className="h-4 w-4 accent-[#24407A]"
                 />
-                <label
-                  htmlFor="remember"
-                  className="text-sm text-[#647187]"
-                >
+                <label htmlFor="remember" className="text-sm text-[#647187]">
                   Remember me
                 </label>
               </div>
 
-              {/* Submit */}
+              {error && (
+                <p className="rounded-lg bg-red-50 p-3 text-sm text-red-600">
+                  {error}
+                </p>
+              )}
+
               <button
                 type="submit"
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#24407A] py-3.5 text-sm font-semibold text-white transition hover:bg-[#1B3263]"
+                disabled={loading}
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#24407A] py-3.5 text-sm font-semibold text-white transition hover:bg-[#1B3263] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Sign in <ArrowRight size={17} />
+                {loading ? "Signing in..." : "Sign in"}
+                {!loading && <ArrowRight size={17} />}
               </button>
             </form>
 

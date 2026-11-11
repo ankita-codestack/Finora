@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+
+import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import {
   Wallet,
@@ -16,12 +17,17 @@ import {
   MoreHorizontal,
   CalendarDays,
   ArrowUpRight,
+  Eye,
+  Pencil,
+  Trash2,
+  X,
 } from "lucide-react";
 import {
   getStoredInvoices,
   formatMoney,
   formatInvoiceDate,
 } from "../lib/invoiceStorage";
+import { apiRequest } from "../lib/api";
 
 const sampleInvoices = [
   {
@@ -99,7 +105,7 @@ function getInvoiceStatus(invoice) {
   if (
     invoice.status === "Pending" &&
     invoice.dueDate &&
-    invoice.dueDate < new Date().toLocaleDateString("en-CA")
+    new Date(invoice.dueDate) < new Date(new Date().toDateString())
   ) {
     return "Overdue";
   }
@@ -154,16 +160,92 @@ function exportInvoices(invoices) {
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-
   URL.revokeObjectURL(url);
+}
+
+function mapMongoInvoice(invoice) {
+  return {
+    ...invoice,
+    id: invoice.invoiceNumber || invoice._id,
+    mongoId: invoice._id,
+    client: invoice.client?.name || "Unknown Client",
+    email: invoice.client?.email || "",
+    issueDate: invoice.issueDate,
+    dueDate: invoice.dueDate,
+    currency: invoice.currency || "USD",
+    totalCents: Math.round(Number(invoice.total || 0) * 100),
+    status: invoice.status || "Draft",
+  };
 }
 
 export default function Invoices() {
   const location = useLocation();
 
-  const [storedInvoices] = useState(() => getStoredInvoices());
+  const [storedInvoices, setStoredInvoices] = useState(() => getStoredInvoices());
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+  const [activeMenu, setActiveMenu] = useState(null);
+  const [selectedInvoice, setSelectedInvoice] = useState(null);
+  const [modalType, setModalType] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const [editForm, setEditForm] = useState({
+    title: "",
+    dueDate: "",
+    status: "Draft",
+    notes: "",
+    paymentTerms: "",
+  });
+
+  async function loadInvoices() {
+    try {
+      const response = await apiRequest("/invoices");
+      const mongoInvoices = (response.invoices || []).map(mapMongoInvoice);
+
+      setStoredInvoices(mongoInvoices);
+      setLoadError("");
+    } catch (error) {
+      setLoadError(error.message || "Unable to load invoices.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+
+useEffect(() => {
+  let isMounted = true;
+
+  const fetchInvoices = async () => {
+    try {
+      const response = await apiRequest("/invoices");
+      const mongoInvoices = (response.invoices || []).map(mapMongoInvoice);
+
+      if (isMounted) {
+        setStoredInvoices(mongoInvoices);
+        setLoadError("");
+      }
+    } catch (error) {
+      if (isMounted) {
+        setLoadError(error.message || "Unable to load invoices.");
+      }
+    } finally {
+      if (isMounted) {
+        setLoading(false);
+      }
+    }
+  };
+
+  fetchInvoices();
+
+  return () => {
+    isMounted = false;
+  };
+}, []);
+
 
   const allInvoices = useMemo(() => {
     const saved = storedInvoices.map((invoice) => ({
@@ -179,9 +261,9 @@ export default function Invoices() {
 
     return allInvoices.filter((invoice) => {
       const matchesSearch =
-        invoice.id.toLowerCase().includes(query) ||
-        invoice.client.toLowerCase().includes(query) ||
-        invoice.email.toLowerCase().includes(query);
+        String(invoice.id || "").toLowerCase().includes(query) ||
+        String(invoice.client || "").toLowerCase().includes(query) ||
+        String(invoice.email || "").toLowerCase().includes(query);
 
       const matchesStatus =
         statusFilter === "All" || invoice.status === statusFilter;
@@ -234,7 +316,97 @@ export default function Invoices() {
     Paid: "bg-[#E8F3ED] text-[#2E7D5B]",
     Pending: "bg-[#FFF5E5] text-[#A66B16]",
     Overdue: "bg-[#FCECEC] text-[#B54747]",
+    Draft: "bg-slate-100 text-slate-600",
+    Cancelled: "bg-slate-100 text-slate-600",
   };
+
+  function openView(invoice) {
+    setSelectedInvoice(invoice);
+    setModalType("view");
+    setActiveMenu(null);
+    setActionError("");
+  }
+
+  function openEdit(invoice) {
+    setSelectedInvoice(invoice);
+    setEditForm({
+      title: invoice.title || "",
+      dueDate: invoice.dueDate
+        ? String(invoice.dueDate).slice(0, 10)
+        : "",
+      status: invoice.status || "Draft",
+      notes: invoice.notes || "",
+      paymentTerms: invoice.paymentTerms || "",
+    });
+    setModalType("edit");
+    setActiveMenu(null);
+    setActionError("");
+  }
+
+  function closeModal() {
+    if (saving) return;
+    setModalType("");
+    setSelectedInvoice(null);
+    setActionError("");
+  }
+
+  async function handleUpdateInvoice(e) {
+    e.preventDefault();
+
+    if (!selectedInvoice?.mongoId) return;
+
+    try {
+      setSaving(true);
+      setActionError("");
+
+      await apiRequest(`/invoices/${selectedInvoice.mongoId}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          title: editForm.title,
+          dueDate: editForm.dueDate,
+          status: editForm.status,
+          notes: editForm.notes,
+          paymentTerms: editForm.paymentTerms,
+        }),
+      });
+
+      setSuccessMessage("Invoice updated successfully.");
+      setModalType("");
+      setSelectedInvoice(null);
+
+      await loadInvoices();
+    } catch (error) {
+      setActionError(error.message || "Unable to update invoice.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDeleteInvoice(invoice) {
+    if (!invoice.mongoId) return;
+
+    const confirmed = window.confirm(
+      `Are you sure you want to delete invoice ${invoice.id}?`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setActionError("");
+      setSuccessMessage("");
+
+      await apiRequest(`/invoices/${invoice.mongoId}`, {
+        method: "DELETE",
+      });
+
+      setSuccessMessage("Invoice deleted successfully.");
+      setActiveMenu(null);
+
+      await loadInvoices();
+    } catch (error) {
+      setActionError(error.message || "Unable to delete invoice.");
+    }
+  }
 
   return (
     <div className="min-h-screen bg-[#F3F5F8] text-[#101A2B]">
@@ -337,6 +509,31 @@ export default function Invoices() {
             </div>
           )}
 
+          {successMessage && (
+            <div
+              role="status"
+              className="mb-6 rounded-xl border border-[#BBDCCB] bg-[#E8F3ED] px-4 py-3 text-sm font-medium text-[#2E7D5B]"
+            >
+              {successMessage}
+              <button
+                type="button"
+                onClick={() => setSuccessMessage("")}
+                className="ml-3 font-semibold"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {(loadError || actionError) && (
+            <div
+              role="alert"
+              className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+            >
+              {loadError || actionError}
+            </div>
+          )}
+
           <div className="mb-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {stats.map((stat) => {
               const Icon = stat.icon;
@@ -366,7 +563,9 @@ export default function Invoices() {
               <div>
                 <h3 className="font-semibold">All invoices</h3>
                 <p className="mt-1 text-xs text-slate-400">
-                  {filteredInvoices.length} records found
+                  {loading
+                    ? "Loading invoices..."
+                    : `${filteredInvoices.length} records found`}
                 </p>
               </div>
 
@@ -400,6 +599,8 @@ export default function Invoices() {
                     <option value="Paid">Paid</option>
                     <option value="Pending">Pending</option>
                     <option value="Overdue">Overdue</option>
+                    <option value="Draft">Draft</option>
+                    <option value="Cancelled">Cancelled</option>
                   </select>
                 </div>
 
@@ -430,64 +631,112 @@ export default function Invoices() {
                 </thead>
 
                 <tbody className="divide-y divide-[#EEF1F5]">
-                  {filteredInvoices.map((invoice) => (
-                    <tr
-                      key={invoice.id}
-                      className="transition hover:bg-[#FAFBFC]"
-                    >
-                      <td className="px-6 py-4">
-                        <p className="text-sm font-semibold text-[#24407A]">
-                          {invoice.id}
-                        </p>
-                      </td>
-
-                      <td className="px-6 py-4">
-                        <p className="text-sm font-medium">{invoice.client}</p>
-                        <p className="mt-1 text-xs text-slate-400">
-                          {invoice.email}
-                        </p>
-                      </td>
-
-                      <td className="px-6 py-4 text-sm text-slate-500">
-                        {formatInvoiceDate(invoice.issueDate)}
-                      </td>
-
-                      <td className="px-6 py-4 text-sm text-slate-500">
-                        {formatInvoiceDate(invoice.dueDate)}
-                      </td>
-
-                      <td className="px-6 py-4 text-sm font-semibold">
-                        {formatMoney(
-                          invoice.totalCents,
-                          invoice.currency || "USD"
-                        )}
-                      </td>
-
-                      <td className="px-6 py-4">
-                        <span
-                          className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                            statusStyles[invoice.status] ||
-                            "bg-slate-100 text-slate-600"
-                          }`}
-                        >
-                          {invoice.status}
-                        </span>
-                      </td>
-
-                      <td className="px-6 py-4 text-right">
-                        <button
-                          type="button"
-                          title="No additional actions available yet"
-                          aria-label={`More actions for ${invoice.id}`}
-                          className="rounded-lg p-2 text-slate-400 hover:bg-[#F3F5F8]"
-                        >
-                          <MoreHorizontal size={18} />
-                        </button>
+                  {loading && (
+                    <tr>
+                      <td colSpan={7} className="px-6 py-14 text-center text-sm text-slate-400">
+                        Loading invoices from MongoDB...
                       </td>
                     </tr>
-                  ))}
+                  )}
 
-                  {filteredInvoices.length === 0 && (
+                  {!loading &&
+                    filteredInvoices.map((invoice) => (
+                      <tr
+                        key={invoice.mongoId || invoice.id}
+                        className="transition hover:bg-[#FAFBFC]"
+                      >
+                        <td className="px-6 py-4">
+                          <p className="text-sm font-semibold text-[#24407A]">
+                            {invoice.id}
+                          </p>
+                        </td>
+
+                        <td className="px-6 py-4">
+                          <p className="text-sm font-medium">
+                            {invoice.client}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-400">
+                            {invoice.email}
+                          </p>
+                        </td>
+
+                        <td className="px-6 py-4 text-sm text-slate-500">
+                          {formatInvoiceDate(invoice.issueDate)}
+                        </td>
+
+                        <td className="px-6 py-4 text-sm text-slate-500">
+                          {formatInvoiceDate(invoice.dueDate)}
+                        </td>
+
+                        <td className="px-6 py-4 text-sm font-semibold">
+                          {formatMoney(invoice.totalCents, invoice.currency || "USD")}
+                        </td>
+
+                        <td className="px-6 py-4">
+                          <span
+                            className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                              statusStyles[invoice.status] ||
+                              "bg-slate-100 text-slate-600"
+                            }`}
+                          >
+                            {invoice.status}
+                          </span>
+                        </td>
+
+                        <td className="relative px-6 py-4 text-right">
+                          <button
+                            type="button"
+                            title="Invoice actions"
+                            aria-label={`More actions for ${invoice.id}`}
+                            onClick={() =>
+                              setActiveMenu(
+                                activeMenu === invoice.id ? null : invoice.id
+                              )
+                            }
+                            className="rounded-lg p-2 text-slate-400 hover:bg-[#F3F5F8]"
+                          >
+                            <MoreHorizontal size={18} />
+                          </button>
+
+                          {activeMenu === invoice.id && (
+                            <div className="absolute right-8 top-12 z-10 w-40 rounded-xl border border-[#E5EAF2] bg-white p-1.5 text-left shadow-lg">
+                              <button
+                                type="button"
+                                onClick={() => openView(invoice)}
+                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-slate-600 hover:bg-[#F3F5F8]"
+                              >
+                                <Eye size={15} />
+                                View details
+                              </button>
+
+                              {invoice.mongoId && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => openEdit(invoice)}
+                                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-slate-600 hover:bg-[#F3F5F8]"
+                                  >
+                                    <Pencil size={15} />
+                                    Edit invoice
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteInvoice(invoice)}
+                                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-red-600 hover:bg-red-50"
+                                  >
+                                    <Trash2 size={15} />
+                                    Delete invoice
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+
+                  {!loading && filteredInvoices.length === 0 && (
                     <tr>
                       <td colSpan={7} className="px-6 py-14 text-center">
                         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-[#F3F5F8] text-slate-400">
@@ -510,11 +759,273 @@ export default function Invoices() {
               <span>
                 Showing {filteredInvoices.length} of {allInvoices.length} invoices
               </span>
-              <span>Demo records and browser-saved invoices</span>
+              <span>MongoDB records and demo records</span>
             </div>
           </section>
         </div>
       </main>
+
+      {modalType && selectedInvoice && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[#101A2B]/40 p-4"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) closeModal();
+          }}
+        >
+          <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
+            <div className="mb-6 flex items-center justify-between">
+              <div>
+                <p className="text-xs text-slate-400">Invoice management</p>
+                <h2 className="mt-1 text-xl font-semibold">
+                  {modalType === "view" ? "Invoice details" : "Edit invoice"}
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {selectedInvoice.id}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeModal}
+                className="rounded-lg p-2 text-slate-400 hover:bg-[#F3F5F8]"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {modalType === "view" ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="rounded-xl bg-[#F8F9FB] p-4">
+                    <p className="text-xs text-slate-400">Client</p>
+                    <p className="mt-1 text-sm font-semibold">
+                      {selectedInvoice.client}
+                    </p>
+                    <p className="mt-1 break-all text-xs text-slate-500">
+                      {selectedInvoice.email}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-[#F8F9FB] p-4">
+                    <p className="text-xs text-slate-400">Total amount</p>
+                    <p className="mt-1 text-lg font-semibold">
+                      {formatMoney(
+                        selectedInvoice.totalCents,
+                        selectedInvoice.currency || "USD"
+                      )}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {selectedInvoice.status}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-xs text-slate-400">Issue date</p>
+                    <p className="mt-1 text-sm font-medium">
+                      {formatInvoiceDate(selectedInvoice.issueDate)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-400">Due date</p>
+                    <p className="mt-1 text-sm font-medium">
+                      {formatInvoiceDate(selectedInvoice.dueDate)}
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="mb-2 text-sm font-semibold">Invoice items</p>
+                  {selectedInvoice.items?.length ? (
+                    <div className="divide-y divide-[#EEF1F5] rounded-xl border border-[#E5EAF2] px-4">
+                      {selectedInvoice.items.map((item, index) => (
+                        <div
+                          key={index}
+                          className="flex justify-between gap-3 py-3 text-sm"
+                        >
+                          <div>
+                            <p className="font-medium">{item.description}</p>
+                            <p className="mt-1 text-xs text-slate-400">
+                              Qty: {item.quantity} × {formatMoney(
+                                Math.round(Number(item.unitPrice || 0) * 100),
+                                selectedInvoice.currency || "USD"
+                              )}
+                            </p>
+                          </div>
+                          <p className="font-semibold">
+                            {formatMoney(
+                              Math.round(Number(item.amount || 0) * 100),
+                              selectedInvoice.currency || "USD"
+                            )}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-500">No item details available.</p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 rounded-xl bg-[#F8F9FB] p-4">
+                  <div>
+                    <p className="text-xs text-slate-400">Subtotal</p>
+                    <p className="mt-1 text-sm font-semibold">
+                      {formatMoney(
+                        Math.round(Number(selectedInvoice.subtotal || 0) * 100),
+                        selectedInvoice.currency || "USD"
+                      )}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-400">Tax</p>
+                    <p className="mt-1 text-sm font-semibold">
+                      {formatMoney(
+                        Math.round(Number(selectedInvoice.tax || 0) * 100),
+                        selectedInvoice.currency || "USD"
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                {selectedInvoice.notes && (
+                  <div>
+                    <p className="text-xs text-slate-400">Notes</p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm">
+                      {selectedInvoice.notes}
+                    </p>
+                  </div>
+                )}
+
+                {selectedInvoice.paymentTerms && (
+                  <div>
+                    <p className="text-xs text-slate-400">Payment terms</p>
+                    <p className="mt-1 text-sm">
+                      {selectedInvoice.paymentTerms}
+                    </p>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  className="w-full rounded-xl bg-[#24407A] px-4 py-3 text-sm font-semibold text-white hover:bg-[#1B3262]"
+                >
+                  Close
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleUpdateInvoice} className="space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">
+                    Invoice title
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editForm.title}
+                    onChange={(e) =>
+                      setEditForm({ ...editForm, title: e.target.value })
+                    }
+                    className="w-full rounded-xl border border-[#DFE6F3] px-4 py-3 text-sm outline-none focus:border-[#24407A]"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">
+                    Due date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={editForm.dueDate}
+                    onChange={(e) =>
+                      setEditForm({ ...editForm, dueDate: e.target.value })
+                    }
+                    className="w-full rounded-xl border border-[#DFE6F3] px-4 py-3 text-sm outline-none focus:border-[#24407A]"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">
+                    Status
+                  </label>
+                  <select
+                    value={editForm.status}
+                    onChange={(e) =>
+                      setEditForm({ ...editForm, status: e.target.value })
+                    }
+                    className="w-full rounded-xl border border-[#DFE6F3] bg-white px-4 py-3 text-sm outline-none focus:border-[#24407A]"
+                  >
+                    <option value="Draft">Draft</option>
+                    <option value="Pending">Pending</option>
+                    <option value="Paid">Paid</option>
+                    <option value="Overdue">Overdue</option>
+                    <option value="Cancelled">Cancelled</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">
+                    Notes
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={editForm.notes}
+                    onChange={(e) =>
+                      setEditForm({ ...editForm, notes: e.target.value })
+                    }
+                    className="w-full rounded-xl border border-[#DFE6F3] px-4 py-3 text-sm outline-none focus:border-[#24407A]"
+                    placeholder="Add invoice notes..."
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">
+                    Payment terms
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.paymentTerms}
+                    onChange={(e) =>
+                      setEditForm({
+                        ...editForm,
+                        paymentTerms: e.target.value,
+                      })
+                    }
+                    className="w-full rounded-xl border border-[#DFE6F3] px-4 py-3 text-sm outline-none focus:border-[#24407A]"
+                    placeholder="e.g. Payment due within 15 days"
+                  />
+                </div>
+
+                {actionError && (
+                  <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
+                    {actionError}
+                  </p>
+                )}
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={closeModal}
+                    disabled={saving}
+                    className="flex-1 rounded-xl border border-[#DFE6F3] px-4 py-3 text-sm font-semibold text-slate-600 hover:bg-[#F3F5F8]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="flex-1 rounded-xl bg-[#24407A] px-4 py-3 text-sm font-semibold text-white hover:bg-[#1B3262] disabled:opacity-60"
+                  >
+                    {saving ? "Saving..." : "Save changes"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

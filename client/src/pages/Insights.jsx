@@ -1,5 +1,5 @@
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -11,14 +11,14 @@ import {
   TrendingUp,
   ArrowUpRight,
   Download,
-  CalendarDays,
   Wallet,
   Receipt,
   CircleDollarSign,
   Clock3,
   Lightbulb,
 } from "lucide-react";
-import { getStoredInvoices, formatMoney } from "../lib/invoiceStorage";
+import { formatMoney } from "../lib/invoiceStorage";
+import { apiRequest } from "../lib/api";
 
 const navItems = [
   { label: "Overview", icon: LayoutDashboard, path: "/dashboard" },
@@ -137,58 +137,118 @@ function downloadCSV(rows, currency) {
   URL.revokeObjectURL(url);
 }
 
-export default function Insights() {
-  const [allInvoices] = useState(() => getStoredInvoices());
-  const [currency, setCurrency] = useState(() => {
-    const invoices = getStoredInvoices();
-    return invoices[0]?.currency || "USD";
-  });
-  const [year, setYear] = useState(String(new Date().getFullYear()));
+function getInvoiceStatus(invoice) {
+  if (
+    invoice.status === "Pending" &&
+    invoice.dueDate &&
+    invoice.dueDate < new Date().toISOString().slice(0, 10)
+  ) {
+    return "Overdue";
+  }
 
-  const currencies = [
-    ...new Set(allInvoices.map((invoice) => invoice.currency).filter(Boolean)),
-  ];
+  return invoice.status;
+}
+
+export default function Insights() {
+  const [allInvoices, setAllInvoices] = useState([]);
+  const [currency, setCurrency] = useState("USD");
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+
+  useEffect(() => {
+    const fetchInvoices = async () => {
+      try {
+        setIsLoading(true);
+        setLoadError("");
+
+        const response = await apiRequest("/invoices");
+
+        const mongoInvoices = (response.invoices || []).map((invoice) => {
+          const client =
+            typeof invoice.client === "object" ? invoice.client : null;
+
+          return {
+            id: invoice._id,
+            client: client?.name || "Unknown Client",
+            email: client?.email || "",
+            currency: invoice.currency || "USD",
+            totalCents: Math.round(Number(invoice.total || 0) * 100),
+            status: invoice.status || "Pending",
+            issueDate: invoice.issueDate
+              ? String(invoice.issueDate).slice(0, 10)
+              : "",
+            dueDate: invoice.dueDate
+              ? String(invoice.dueDate).slice(0, 10)
+              : "",
+            paidAt: invoice.paidAt || null,
+          };
+        });
+
+        setAllInvoices(mongoInvoices);
+      } catch (error) {
+        console.error("Insights loading failed:", error);
+        setLoadError(error.message || "Unable to load insights.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchInvoices();
+  }, []);
+
+  const currencies = useMemo(
+    () => [
+      ...new Set(
+        allInvoices.map((invoice) => invoice.currency).filter(Boolean)
+      ),
+    ],
+    [allInvoices]
+  );
 
   const availableCurrencies = currencies.length ? currencies : ["USD"];
 
-  const years = [
-    ...new Set(
-      allInvoices
-        .map((invoice) => invoice.issueDate?.slice(0, 4))
-        .filter((value) => /^\d{4}$/.test(value || ""))
-    ),
-  ].sort((a, b) => b.localeCompare(a));
+  const years = useMemo(
+    () =>
+      [
+        ...new Set(
+          allInvoices
+            .map((invoice) => invoice.issueDate?.slice(0, 4))
+            .filter((value) => /^\d{4}$/.test(value || ""))
+        ),
+      ].sort((a, b) => b.localeCompare(a)),
+    [allInvoices]
+  );
 
   const availableYears = [
     ...new Set([String(new Date().getFullYear()), ...years]),
   ].sort((a, b) => b.localeCompare(a));
 
-  const filteredInvoices = useMemo(
-    () =>
-      allInvoices.filter(
-        (invoice) =>
-          invoice.currency === currency &&
-          invoice.issueDate?.startsWith(year)
-      ),
-    [allInvoices, currency, year]
-  );
+  const selectedCurrency = availableCurrencies.includes(currency)
+    ? currency
+    : availableCurrencies[0];
+
+  const selectedYear = availableYears.includes(year)
+    ? year
+    : availableYears[0];
+
+  const filteredInvoices = allInvoices.filter(
+  (invoice) =>
+    invoice.currency === selectedCurrency &&
+    invoice.issueDate?.startsWith(selectedYear)
+);
 
   const stats = useMemo(() => {
     const paid = filteredInvoices.filter(
-      (invoice) => invoice.status === "Paid"
+      (invoice) => getInvoiceStatus(invoice) === "Paid"
     );
 
     const overdue = filteredInvoices.filter(
-      (invoice) =>
-        invoice.status === "Overdue" ||
-        (invoice.status === "Pending" &&
-          invoice.dueDate < new Date().toISOString().slice(0, 10))
+      (invoice) => getInvoiceStatus(invoice) === "Overdue"
     );
 
     const pending = filteredInvoices.filter(
-      (invoice) =>
-        invoice.status === "Pending" &&
-        invoice.dueDate >= new Date().toISOString().slice(0, 10)
+      (invoice) => getInvoiceStatus(invoice) === "Pending"
     );
 
     const revenue = paid.reduce(
@@ -228,7 +288,7 @@ export default function Insights() {
       );
 
       const paid = monthInvoices.filter(
-        (invoice) => invoice.status === "Paid"
+        (invoice) => getInvoiceStatus(invoice) === "Paid"
       );
 
       return {
@@ -239,10 +299,10 @@ export default function Insights() {
         ),
         paidCount: paid.length,
         pendingCount: monthInvoices.filter(
-          (invoice) => invoice.status === "Pending"
+          (invoice) => getInvoiceStatus(invoice) === "Pending"
         ).length,
         overdueCount: monthInvoices.filter(
-          (invoice) => invoice.status === "Overdue"
+          (invoice) => getInvoiceStatus(invoice) === "Overdue"
         ).length,
       };
     });
@@ -270,7 +330,7 @@ export default function Insights() {
 
       grouped[email].count += 1;
 
-      if (invoice.status === "Paid") {
+      if (getInvoiceStatus(invoice) === "Paid") {
         grouped[email].total += invoice.totalCents;
       }
     });
@@ -291,17 +351,13 @@ export default function Insights() {
     ? (stats.pendingCount / paymentTotal) * 100
     : 0;
 
-  const overduePercent = paymentTotal
-    ? (stats.overdueCount / paymentTotal) * 100
-    : 0;
-
   const insights = [
     {
       icon: TrendingUp,
       title: "Collected revenue",
       description:
         stats.paidCount > 0
-          ? `You have collected ${formatMoney(stats.revenue, currency)} across ${stats.paidCount} paid invoice(s) in ${year}.`
+          ? `You have collected ${formatMoney(stats.revenue, selectedCurrency)} across ${stats.paidCount} paid invoice(s) in ${selectedYear}.`
           : "No paid invoices are recorded for this currency and year yet.",
       color: "text-[#2E7D5B]",
     },
@@ -310,7 +366,7 @@ export default function Insights() {
       title: "Outstanding payments",
       description:
         stats.outstanding > 0
-          ? `${formatMoney(stats.outstanding, currency)} is still outstanding. Review pending and overdue invoices.`
+          ? `${formatMoney(stats.outstanding, selectedCurrency)} is still outstanding. Review pending and overdue invoices.`
           : "There are no outstanding amounts in the selected records.",
       color: "text-[#A66B13]",
     },
@@ -319,7 +375,7 @@ export default function Insights() {
       title: "Invoice activity",
       description:
         stats.totalCount > 0
-          ? `You created ${stats.totalCount} invoice(s) in ${year}. Your average invoice value is ${formatMoney(stats.average, currency)}.`
+          ? `You created ${stats.totalCount} invoice(s) in ${selectedYear}. Your average invoice value is ${formatMoney(stats.average, selectedCurrency)}.`
           : "Create an invoice to start building your financial overview.",
       color: "text-[#24407A]",
     },
@@ -354,13 +410,13 @@ export default function Insights() {
                 Business performance
               </h2>
               <p className="mt-1 text-sm text-[#8993A3]">
-                Financial metrics calculated from your saved invoices.
+                Financial metrics calculated from your MongoDB invoices.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-2">
               <select
-                value={currency}
+                value={selectedCurrency}
                 onChange={(event) => setCurrency(event.target.value)}
                 className="rounded-lg border border-[#E1E6ED] bg-white px-3 py-2.5 text-xs font-medium text-[#465367] outline-none"
               >
@@ -372,7 +428,7 @@ export default function Insights() {
               </select>
 
               <select
-                value={year}
+                value={selectedYear}
                 onChange={(event) => setYear(event.target.value)}
                 className="rounded-lg border border-[#E1E6ED] bg-white px-3 py-2.5 text-xs font-medium text-[#465367] outline-none"
               >
@@ -384,8 +440,9 @@ export default function Insights() {
               </select>
 
               <button
-                onClick={() => downloadCSV(monthlyData, currency)}
-                className="flex items-center gap-2 rounded-lg bg-[#24407A] px-3 py-2.5 text-xs font-medium text-white hover:bg-[#1B3261]"
+                onClick={() => downloadCSV(monthlyData, selectedCurrency)}
+                disabled={isLoading || Boolean(loadError)}
+                className="flex items-center gap-2 rounded-lg bg-[#24407A] px-3 py-2.5 text-xs font-medium text-white hover:bg-[#1B3261] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Download size={15} />
                 Export report
@@ -393,28 +450,40 @@ export default function Insights() {
             </div>
           </div>
 
+          {loadError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {loadError}
+            </div>
+          )}
+
+          {isLoading && (
+            <div className="rounded-xl border border-[#E8ECF2] bg-white px-5 py-8 text-center text-sm text-[#697586]">
+              Loading financial insights from MongoDB...
+            </div>
+          )}
+
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <StatCard
               title="Collected revenue"
-              value={formatMoney(stats.revenue, currency)}
+              value={formatMoney(stats.revenue, selectedCurrency)}
               note={`${stats.paidCount} paid invoices`}
               icon={CircleDollarSign}
             />
             <StatCard
               title="Total invoiced"
-              value={formatMoney(stats.totalInvoiced, currency)}
+              value={formatMoney(stats.totalInvoiced, selectedCurrency)}
               note={`${stats.totalCount} invoices created`}
               icon={Wallet}
             />
             <StatCard
               title="Outstanding"
-              value={formatMoney(stats.outstanding, currency)}
+              value={formatMoney(stats.outstanding, selectedCurrency)}
               note={`${stats.pendingCount + stats.overdueCount} unpaid invoices`}
               icon={Receipt}
             />
             <StatCard
               title="Average invoice"
-              value={formatMoney(stats.average, currency)}
+              value={formatMoney(stats.average, selectedCurrency)}
               note="Average value per invoice"
               icon={FileText}
             />
@@ -426,7 +495,7 @@ export default function Insights() {
                 <div>
                   <h3 className="font-semibold">Revenue overview</h3>
                   <p className="mt-1 text-xs text-[#8993A3]">
-                    Monthly collected revenue · {currency} · {year}
+                    Monthly collected revenue · {selectedCurrency} · {selectedYear}
                   </p>
                 </div>
 
@@ -438,11 +507,11 @@ export default function Insights() {
 
               <div className="mt-8 flex h-[230px] gap-3">
                 <div className="flex flex-col justify-between pb-7 text-[10px] text-[#A0A8B5]">
-                  <span>{formatMoney(maxRevenue, currency)}</span>
-                  <span>{formatMoney(maxRevenue * 0.75, currency)}</span>
-                  <span>{formatMoney(maxRevenue * 0.5, currency)}</span>
-                  <span>{formatMoney(maxRevenue * 0.25, currency)}</span>
-                  <span>{formatMoney(0, currency)}</span>
+                  <span>{formatMoney(maxRevenue, selectedCurrency)}</span>
+                  <span>{formatMoney(maxRevenue * 0.75, selectedCurrency)}</span>
+                  <span>{formatMoney(maxRevenue * 0.5, selectedCurrency)}</span>
+                  <span>{formatMoney(maxRevenue * 0.25, selectedCurrency)}</span>
+                  <span>{formatMoney(0, selectedCurrency)}</span>
                 </div>
 
                 <div className="relative flex flex-1 items-end justify-between gap-2 border-b border-[#E8ECF2] pb-0">
@@ -461,7 +530,7 @@ export default function Insights() {
                       className="relative z-10 flex h-full flex-1 flex-col items-center justify-end gap-2"
                     >
                       <div
-                        title={`${item.month}: ${formatMoney(item.revenue, currency)}`}
+                        title={`${item.month}: ${formatMoney(item.revenue, selectedCurrency)}`}
                         className="w-full max-w-7 rounded-t-md bg-[#24407A] transition hover:opacity-75"
                         style={{
                           height: `${(item.revenue / maxRevenue) * 100}%`,
@@ -476,7 +545,7 @@ export default function Insights() {
                 </div>
               </div>
 
-              {stats.totalCount === 0 && (
+              {!isLoading && !loadError && stats.totalCount === 0 && (
                 <p className="mt-10 text-center text-xs text-[#8993A3]">
                   No invoice data for this selection yet.
                 </p>
@@ -573,7 +642,7 @@ export default function Insights() {
                         </div>
                       </div>
                       <p className="shrink-0 text-sm font-semibold">
-                        {formatMoney(client.total, currency)}
+                        {formatMoney(client.total, selectedCurrency)}
                       </p>
                     </div>
                   ))
@@ -635,7 +704,7 @@ export default function Insights() {
           </div>
 
           <p className="text-center text-[11px] text-[#A0A8B5]">
-            Based on invoices saved in this browser · Live database analytics will be connected later.
+            Live financial analytics · Synced with MongoDB
           </p>
         </div>
       </main>

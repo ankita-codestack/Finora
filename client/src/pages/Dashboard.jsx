@@ -1,5 +1,5 @@
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -21,10 +21,11 @@ import {
 } from "lucide-react";
 
 import {
-  getStoredInvoices,
   formatMoney,
   formatInvoiceDate,
 } from "../lib/invoiceStorage";
+
+import { apiRequest } from "../lib/api";
 
 const navigation = [
   { name: "Overview", icon: LayoutDashboard, path: "/dashboard" },
@@ -56,7 +57,49 @@ const getInvoiceStatus = (invoice) => {
 };
 
 export default function Dashboard() {
-  const [invoices] = useState(() => getStoredInvoices());
+  const [invoices, setInvoices] = useState([]);
+  const [currency, setCurrency] = useState("USD");
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+
+  useEffect(() => {
+    const fetchInvoices = async () => {
+      try {
+        setIsLoading(true);
+        setLoadError("");
+
+        const response = await apiRequest("/invoices");
+
+        const mongoInvoices = (response.invoices || []).map((invoice) => ({
+          id: invoice.invoiceNumber || invoice._id,
+          mongoId: invoice._id,
+          client:
+            typeof invoice.client === "object"
+              ? invoice.client?.name || "Unknown Client"
+              : invoice.client || "Unknown Client",
+          issueDate: invoice.issueDate
+            ? String(invoice.issueDate).slice(0, 10)
+            : "",
+          dueDate: invoice.dueDate
+            ? String(invoice.dueDate).slice(0, 10)
+            : "",
+          currency: invoice.currency || "USD",
+          totalCents: Math.round(Number(invoice.total || 0) * 100),
+          status: invoice.status || "Pending",
+          createdAt: invoice.createdAt,
+        }));
+
+        setInvoices(mongoInvoices);
+      } catch (error) {
+        console.error("Dashboard invoice loading failed:", error);
+        setLoadError(error.message || "Unable to load dashboard data.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchInvoices();
+  }, []);
 
   const availableCurrencies = useMemo(() => {
     const currencies = [
@@ -66,11 +109,13 @@ export default function Dashboard() {
     return currencies.length ? currencies : ["USD"];
   }, [invoices]);
 
-  const [currency, setCurrency] = useState(availableCurrencies[0]);
+  const selectedCurrency = availableCurrencies.includes(currency)
+    ? currency
+    : availableCurrencies[0];
 
   const currencyInvoices = useMemo(
-    () => invoices.filter((invoice) => invoice.currency === currency),
-    [invoices, currency]
+    () => invoices.filter((invoice) => invoice.currency === selectedCurrency),
+    [invoices, selectedCurrency]
   );
 
   const summary = useMemo(() => {
@@ -131,6 +176,7 @@ export default function Dashboard() {
           if (!invoice.issueDate) return false;
 
           const date = new Date(`${invoice.issueDate}T00:00:00`);
+
           return (
             date.getFullYear() === currentYear &&
             date.getMonth() === month
@@ -162,13 +208,10 @@ export default function Dashboard() {
   const pendingPercentage =
     summary.total > 0 ? (pendingCount / summary.total) * 100 : 0;
 
-  const overduePercentage =
-    summary.total > 0 ? (overdueCount / summary.total) * 100 : 0;
-
   const stats = [
     {
       title: "Collected Revenue",
-      value: formatMoney(summary.paidRevenue, currency),
+      value: formatMoney(summary.paidRevenue, selectedCurrency),
       icon: Wallet,
       note: "From paid invoices",
     },
@@ -180,7 +223,7 @@ export default function Dashboard() {
     },
     {
       title: "Outstanding Payments",
-      value: formatMoney(summary.pendingAmount, currency),
+      value: formatMoney(summary.pendingAmount, selectedCurrency),
       icon: Clock3,
       note: "Pending + overdue",
     },
@@ -341,7 +384,7 @@ export default function Dashboard() {
           {/* Currency selector */}
           <div className="flex justify-end mb-4">
             <select
-              value={currency}
+              value={selectedCurrency}
               onChange={(event) => setCurrency(event.target.value)}
               className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600 outline-none focus:border-[#24407A]"
             >
@@ -352,6 +395,12 @@ export default function Dashboard() {
               ))}
             </select>
           </div>
+
+          {loadError && (
+            <div className="bg-rose-50 text-rose-600 border border-rose-100 rounded-lg p-3 mb-5 text-sm">
+              {loadError}
+            </div>
+          )}
 
           {/* Stats */}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-7">
@@ -371,7 +420,7 @@ export default function Dashboard() {
                   </div>
 
                   <h3 className="text-2xl font-semibold tracking-tight break-words">
-                    {stat.value}
+                    {isLoading ? "Loading..." : stat.value}
                   </h3>
 
                   <p className="text-xs text-slate-400 mt-2">{stat.note}</p>
@@ -391,13 +440,15 @@ export default function Dashboard() {
                   </p>
                 </div>
                 <span className="text-xs text-slate-500 border border-slate-200 rounded-lg px-3 py-2">
-                  {currency}
+                  {selectedCurrency}
                 </span>
               </div>
 
               <div className="flex items-end gap-2 mb-6">
                 <span className="text-3xl font-semibold">
-                  {formatMoney(summary.paidRevenue, currency)}
+                  {isLoading
+                    ? "Loading..."
+                    : formatMoney(summary.paidRevenue, selectedCurrency)}
                 </span>
                 <span className="text-xs text-slate-400 mb-1">
                   Total collected
@@ -415,7 +466,7 @@ export default function Dashboard() {
                     <div
                       key={item.month}
                       className="flex-1 h-full flex items-end group relative"
-                      title={`${item.month}: ${formatMoney(item.amount, currency)}`}
+                      title={`${item.month}: ${formatMoney(item.amount, selectedCurrency)}`}
                     >
                       <div
                         style={{ height: `${height}%` }}
@@ -458,7 +509,9 @@ export default function Dashboard() {
                   }}
                 >
                   <div className="w-28 h-28 rounded-full bg-white flex flex-col items-center justify-center">
-                    <p className="text-3xl font-semibold">{summary.total}</p>
+                    <p className="text-3xl font-semibold">
+                      {isLoading ? "..." : summary.total}
+                    </p>
                     <p className="text-xs text-slate-400">Total invoices</p>
                   </div>
                 </div>
@@ -523,13 +576,19 @@ export default function Dashboard() {
                 </thead>
 
                 <tbody className="divide-y divide-slate-100">
-                  {recentInvoices.length > 0 ? (
+                  {isLoading ? (
+                    <tr>
+                      <td colSpan="5" className="px-6 py-12 text-center text-sm text-slate-400">
+                        Loading invoices...
+                      </td>
+                    </tr>
+                  ) : recentInvoices.length > 0 ? (
                     recentInvoices.map((invoice) => {
                       const status = getInvoiceStatus(invoice);
 
                       return (
                         <tr
-                          key={invoice.id}
+                          key={invoice.mongoId}
                           className="hover:bg-slate-50/70"
                         >
                           <td className="px-6 py-4 font-medium text-[#24407A] whitespace-nowrap">
@@ -542,7 +601,7 @@ export default function Dashboard() {
                             {formatInvoiceDate(invoice.issueDate)}
                           </td>
                           <td className="px-6 py-4 font-semibold whitespace-nowrap">
-                            {formatMoney(invoice.totalCents, currency)}
+                            {formatMoney(invoice.totalCents, selectedCurrency)}
                           </td>
                           <td className="px-6 py-4">
                             <span
@@ -593,7 +652,7 @@ export default function Dashboard() {
           </section>
 
           <p className="text-center text-xs text-slate-400 mt-8">
-            Finora dashboard · Live local invoice data
+            Finora dashboard · Live MongoDB data
           </p>
         </div>
       </main>

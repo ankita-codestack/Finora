@@ -107,6 +107,26 @@ const invoiceSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+
+    isActive: {
+  type: Boolean,
+  default: true,
+},
+
+  paypalOrderId: {
+  type: String,
+  default: null,
+},
+
+paypalCaptureId: {
+  type: String,
+  default: null,
+},
+
+paidAt: {
+  type: Date,
+  default: null,
+},
   },
   {
     timestamps: true,
