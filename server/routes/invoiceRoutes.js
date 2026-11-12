@@ -153,7 +153,6 @@ router.post("/:id/share", protect, async (req, res) => {
       });
     }
 
-    // Reuse the existing token if one is already generated.
     if (!invoice.publicToken) {
       invoice.publicToken = crypto.randomBytes(32).toString("hex");
       await invoice.save();
